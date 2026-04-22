@@ -1,6 +1,6 @@
 """
 Satellite Intelligence Flask App - Single File with Embedded HTML
-Vercel-compatible deployment
+Vercel-compatible | Inline satellite maps via Leaflet.js (no API keys)
 """
 
 from flask import Flask, request, jsonify
@@ -8,18 +8,19 @@ import yfinance as yf
 
 app = Flask(__name__)
 
-HTML = """<!DOCTYPE html>
+HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SATINTEL — Satellite Intelligence Platform</title>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
     --bg: #030a0f;
     --surface: #071520;
-    --surface2: #0a1f30;
     --border: #0e3a5a;
     --accent: #00d4ff;
     --accent2: #00ff9d;
@@ -27,640 +28,314 @@ HTML = """<!DOCTYPE html>
     --text: #c8e8f5;
     --text-dim: #4a7a99;
     --danger: #ff3860;
-    --glow: 0 0 20px rgba(0, 212, 255, 0.3);
-    --glow2: 0 0 20px rgba(0, 255, 157, 0.3);
+    --glow: 0 0 20px rgba(0,212,255,0.3);
+    --glow2: 0 0 20px rgba(0,255,157,0.3);
   }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
+  * { margin:0; padding:0; box-sizing:border-box; }
   body {
-    background: var(--bg);
-    color: var(--text);
+    background: var(--bg); color: var(--text);
     font-family: 'Rajdhani', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
+    min-height: 100vh; overflow-x: hidden;
   }
-
-  /* Animated grid background */
   body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
+    content:''; position:fixed; inset:0;
     background-image:
-      linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+      linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
     background-size: 40px 40px;
-    pointer-events: none;
-    z-index: 0;
+    pointer-events:none; z-index:0;
   }
-
   body::after {
-    content: '';
-    position: fixed;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(ellipse at 30% 20%, rgba(0, 80, 120, 0.15) 0%, transparent 60%),
-                radial-gradient(ellipse at 70% 80%, rgba(0, 60, 40, 0.1) 0%, transparent 60%);
-    pointer-events: none;
-    z-index: 0;
+    content:''; position:fixed; top:-50%; left:-50%;
+    width:200%; height:200%;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(0,80,120,0.15) 0%, transparent 60%),
+      radial-gradient(ellipse at 70% 80%, rgba(0,60,40,0.1) 0%, transparent 60%);
+    pointer-events:none; z-index:0;
     animation: drift 20s ease-in-out infinite alternate;
   }
+  @keyframes drift { from{transform:translate(0,0)} to{transform:translate(3%,2%)} }
 
-  @keyframes drift {
-    from { transform: translate(0, 0); }
-    to { transform: translate(3%, 2%); }
-  }
+  .corner-deco { position:fixed; width:80px; height:80px; pointer-events:none; z-index:2; opacity:0.25; }
+  .corner-deco.tl { top:16px; left:16px; border-top:1px solid var(--accent); border-left:1px solid var(--accent); }
+  .corner-deco.tr { top:16px; right:16px; border-top:1px solid var(--accent); border-right:1px solid var(--accent); }
+  .corner-deco.bl { bottom:16px; left:16px; border-bottom:1px solid var(--accent); border-left:1px solid var(--accent); }
+  .corner-deco.br { bottom:16px; right:16px; border-bottom:1px solid var(--accent); border-right:1px solid var(--accent); }
 
-  .container {
-    position: relative;
-    z-index: 1;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 24px 60px;
+  .scanline {
+    position:fixed; top:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
+    animation:scan 8s linear infinite; pointer-events:none; z-index:9999;
   }
+  @keyframes scan { from{top:0;opacity:1} to{top:100vh;opacity:0} }
 
   /* HEADER */
   header {
-    position: relative;
-    z-index: 1;
-    padding: 32px 24px 0;
-    max-width: 1200px;
-    margin: 0 auto 40px;
+    position:relative; z-index:1;
+    padding:28px 28px 0;
+    max-width:1300px; margin:0 auto 36px;
   }
-
   .header-inner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 20px;
+    display:flex; align-items:center;
+    justify-content:space-between;
+    border-bottom:1px solid var(--border); padding-bottom:18px;
   }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-
+  .logo { display:flex; align-items:center; gap:14px; }
   .logo-icon {
-    width: 44px;
-    height: 44px;
-    border: 2px solid var(--accent);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: var(--glow);
-    animation: rotate-ring 8s linear infinite;
-    position: relative;
+    width:42px; height:42px;
+    border:2px solid var(--accent); border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:var(--glow);
+    animation:spin 10s linear infinite; position:relative;
   }
-
   .logo-icon::before {
-    content: '';
-    position: absolute;
-    inset: 4px;
-    border-radius: 50%;
-    border: 1px solid rgba(0,212,255,0.4);
-    border-top-color: var(--accent);
-    animation: rotate-ring 3s linear infinite reverse;
+    content:''; position:absolute; inset:5px; border-radius:50%;
+    border:1px solid rgba(0,212,255,0.35); border-top-color:var(--accent);
+    animation:spin 3s linear infinite reverse;
   }
-
-  .logo-icon svg { width: 20px; height: 20px; color: var(--accent); }
-
-  @keyframes rotate-ring {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .logo-icon svg { width:18px; height:18px; color:var(--accent); animation:spinR 10s linear infinite; }
+  @keyframes spinR { to{transform:rotate(-360deg)} }
   .logo-text {
-    font-family: 'Orbitron', monospace;
-    font-size: 1.5rem;
-    font-weight: 900;
-    letter-spacing: 0.1em;
-    color: var(--accent);
-    text-shadow: var(--glow);
+    font-family:'Orbitron',monospace; font-size:1.45rem; font-weight:900;
+    letter-spacing:0.1em; color:var(--accent); text-shadow:var(--glow);
   }
-
   .logo-sub {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.65rem;
-    color: var(--text-dim);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
+    font-family:'Share Tech Mono',monospace; font-size:0.62rem;
+    color:var(--text-dim); letter-spacing:0.2em; text-transform:uppercase;
   }
-
-  .status-bar {
-    display: flex;
-    gap: 20px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.7rem;
-    color: var(--text-dim);
-  }
-
-  .status-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
+  .status-bar { display:flex; gap:20px; font-family:'Share Tech Mono',monospace; font-size:0.68rem; color:var(--text-dim); }
+  .status-item { display:flex; align-items:center; gap:6px; }
   .status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent2);
-    box-shadow: 0 0 8px var(--accent2);
-    animation: blink 2s ease-in-out infinite;
+    width:7px; height:7px; border-radius:50%;
+    background:var(--accent2); box-shadow:0 0 8px var(--accent2);
+    animation:blink 2s ease-in-out infinite;
+  }
+  .status-dot.amber { background:var(--accent3); box-shadow:0 0 8px var(--accent3); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* CONTAINER */
+  .container {
+    position:relative; z-index:1;
+    max-width:1300px; margin:0 auto;
+    padding:0 28px 60px;
   }
 
-  .status-dot.amber { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); }
-
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+  /* SEARCH */
+  .search-section { text-align:center; margin-bottom:48px; }
+  .search-eyebrow {
+    font-family:'Orbitron',monospace; font-size:0.68rem;
+    letter-spacing:0.3em; color:var(--text-dim); text-transform:uppercase; margin-bottom:10px;
   }
-
-  /* SEARCH SECTION */
-  .search-section {
-    text-align: center;
-    margin-bottom: 48px;
-  }
-
-  .search-title {
-    font-family: 'Orbitron', monospace;
-    font-size: 0.75rem;
-    letter-spacing: 0.3em;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    margin-bottom: 12px;
-  }
-
   .search-headline {
-    font-family: 'Rajdhani', sans-serif;
-    font-size: 2.2rem;
-    font-weight: 700;
-    line-height: 1.1;
-    margin-bottom: 8px;
-    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    font-size:2.1rem; font-weight:700; line-height:1.1; margin-bottom:8px;
+    background:linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
   }
-
-  .search-desc {
-    color: var(--text-dim);
-    font-size: 1rem;
-    font-weight: 300;
-    margin-bottom: 32px;
-  }
-
-  .search-box {
-    display: flex;
-    gap: 0;
-    max-width: 520px;
-    margin: 0 auto;
-    position: relative;
-  }
-
+  .search-desc { color:var(--text-dim); font-size:1rem; font-weight:300; margin-bottom:28px; }
+  .search-box { display:flex; max-width:500px; margin:0 auto; position:relative; }
   .search-box::before {
-    content: 'TICKER';
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.15em;
-    color: var(--text-dim);
-    z-index: 2;
+    content:'TICKER'; position:absolute; left:14px; top:50%; transform:translateY(-50%);
+    font-family:'Share Tech Mono',monospace; font-size:0.58rem; letter-spacing:0.15em;
+    color:var(--text-dim); z-index:2; pointer-events:none;
   }
-
   #ticker-input {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-right: none;
-    color: var(--accent);
-    font-family: 'Orbitron', monospace;
-    font-size: 1.1rem;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    padding: 16px 16px 16px 76px;
-    outline: none;
-    text-transform: uppercase;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    border-radius: 4px 0 0 4px;
+    flex:1; background:var(--surface); border:1px solid var(--border); border-right:none;
+    color:var(--accent); font-family:'Orbitron',monospace; font-size:1.05rem; font-weight:700;
+    letter-spacing:0.15em; padding:15px 14px 15px 72px; outline:none; text-transform:uppercase;
+    transition:border-color 0.2s, box-shadow 0.2s; border-radius:4px 0 0 4px;
   }
-
-  #ticker-input::placeholder {
-    color: var(--text-dim);
-    font-size: 0.85rem;
-    letter-spacing: 0.1em;
-  }
-
-  #ticker-input:focus {
-    border-color: var(--accent);
-    box-shadow: var(--glow);
-  }
-
+  #ticker-input::placeholder { color:var(--text-dim); font-size:0.8rem; }
+  #ticker-input:focus { border-color:var(--accent); box-shadow:var(--glow); }
   #analyze-btn {
-    background: var(--accent);
-    color: var(--bg);
-    border: none;
-    padding: 16px 28px;
-    font-family: 'Orbitron', monospace;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    cursor: pointer;
-    transition: all 0.2s;
-    border-radius: 0 4px 4px 0;
-    white-space: nowrap;
-    position: relative;
-    overflow: hidden;
+    background:var(--accent); color:var(--bg); border:none;
+    padding:15px 24px; font-family:'Orbitron',monospace; font-size:0.7rem; font-weight:700;
+    letter-spacing:0.15em; cursor:pointer; transition:all 0.2s;
+    border-radius:0 4px 4px 0; white-space:nowrap; overflow:hidden; position:relative;
   }
-
   #analyze-btn::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(255,255,255,0.1);
-    transform: translateX(-100%);
-    transition: transform 0.3s;
+    content:''; position:absolute; inset:0;
+    background:rgba(255,255,255,0.12); transform:translateX(-100%); transition:transform 0.3s;
   }
+  #analyze-btn:hover::after { transform:translateX(0); }
+  #analyze-btn:hover { box-shadow:var(--glow); }
+  #analyze-btn:disabled { opacity:0.5; cursor:not-allowed; }
 
-  #analyze-btn:hover::after { transform: translateX(0); }
-  #analyze-btn:hover { box-shadow: var(--glow); }
-  #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #error-box {
+    display:none; background:rgba(255,56,96,0.08);
+    border:1px solid var(--danger); border-radius:4px; padding:12px 16px;
+    font-family:'Share Tech Mono',monospace; font-size:0.78rem; color:var(--danger);
+    max-width:500px; margin:14px auto 0; letter-spacing:0.05em;
+  }
 
   /* LOADING */
   #loading {
-    display: none;
-    text-align: center;
-    padding: 40px;
-    font-family: 'Share Tech Mono', monospace;
-    color: var(--accent);
-    font-size: 0.85rem;
-    letter-spacing: 0.1em;
+    display:none; text-align:center; padding:48px;
+    font-family:'Share Tech Mono',monospace; color:var(--accent);
+    font-size:0.82rem; letter-spacing:0.1em;
   }
-
   .loader-orbit {
-    width: 50px;
-    height: 50px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin: 0 auto 16px;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .loading-text::after {
-    content: '...';
-    animation: dots 1.5s steps(4, end) infinite;
-  }
-
-  @keyframes dots {
-    0%, 25% { content: '.'; }
-    50% { content: '..'; }
-    75%, 100% { content: '...'; }
-  }
-
-  /* ERROR */
-  #error-box {
-    display: none;
-    background: rgba(255, 56, 96, 0.1);
-    border: 1px solid var(--danger);
-    border-radius: 4px;
-    padding: 14px 18px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.8rem;
-    color: var(--danger);
-    max-width: 520px;
-    margin: 16px auto 0;
-    letter-spacing: 0.05em;
+    width:48px; height:48px;
+    border:2px solid var(--border); border-top-color:var(--accent);
+    border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 14px;
   }
 
   /* RESULTS */
-  #results {
-    display: none;
-    animation: fadeUp 0.5s ease-out;
-  }
+  #results { display:none; animation:fadeUp 0.5s ease-out; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
 
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* COMPANY CARD */
+  /* Company card */
   .company-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 28px 32px;
-    margin-bottom: 32px;
-    position: relative;
-    overflow: hidden;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; padding:26px 30px; margin-bottom:30px;
+    position:relative; overflow:hidden;
   }
-
   .company-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, var(--accent), transparent);
   }
-
   .company-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-    flex-wrap: wrap;
-    margin-bottom: 20px;
+    display:flex; align-items:flex-start; justify-content:space-between;
+    gap:20px; flex-wrap:wrap; margin-bottom:18px;
   }
-
-  .company-name-wrap {}
-
   .ticker-badge {
-    display: inline-block;
-    font-family: 'Orbitron', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.2em;
-    color: var(--accent);
-    background: rgba(0, 212, 255, 0.08);
-    border: 1px solid rgba(0, 212, 255, 0.3);
-    padding: 3px 10px;
-    border-radius: 2px;
-    margin-bottom: 8px;
+    display:inline-block; font-family:'Orbitron',monospace; font-size:0.62rem;
+    letter-spacing:0.2em; color:var(--accent); background:rgba(0,212,255,0.08);
+    border:1px solid rgba(0,212,255,0.3); padding:3px 9px; border-radius:2px; margin-bottom:7px;
   }
-
-  .company-name {
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1.1;
-    margin-bottom: 4px;
-  }
-
-  .company-meta {
-    font-size: 0.9rem;
-    color: var(--text-dim);
-  }
-
-  .company-stats {
-    display: flex;
-    gap: 24px;
-    flex-wrap: wrap;
-  }
-
-  .stat {
-    text-align: center;
-  }
-
+  .company-name { font-size:1.7rem; font-weight:700; color:var(--text); margin-bottom:4px; }
+  .company-meta { font-size:0.88rem; color:var(--text-dim); }
+  .company-stats { display:flex; gap:22px; flex-wrap:wrap; }
+  .stat { text-align:center; }
   .stat-val {
-    font-family: 'Orbitron', monospace;
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--accent2);
-    text-shadow: var(--glow2);
+    font-family:'Orbitron',monospace; font-size:1.05rem; font-weight:700;
+    color:var(--accent2); text-shadow:var(--glow2);
   }
-
+  .stat-val.sm { font-size:0.75rem; letter-spacing:0.04em; }
   .stat-label {
-    font-size: 0.7rem;
-    color: var(--text-dim);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    font-family: 'Share Tech Mono', monospace;
-    margin-top: 2px;
+    font-size:0.68rem; color:var(--text-dim); letter-spacing:0.1em;
+    text-transform:uppercase; font-family:'Share Tech Mono',monospace; margin-top:2px;
   }
-
   .company-desc {
-    font-size: 0.95rem;
-    color: var(--text-dim);
-    line-height: 1.6;
-    font-weight: 300;
-    border-top: 1px solid var(--border);
-    padding-top: 16px;
+    font-size:0.93rem; color:var(--text-dim); line-height:1.6;
+    font-weight:300; border-top:1px solid var(--border); padding-top:14px;
   }
 
-  /* SIGNALS */
   .section-label {
-    font-family: 'Orbitron', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.3em;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    font-family:'Orbitron',monospace; font-size:0.63rem;
+    letter-spacing:0.3em; color:var(--text-dim); text-transform:uppercase;
+    margin-bottom:14px; display:flex; align-items:center; gap:10px;
   }
+  .section-label::after { content:''; flex:1; height:1px; background:var(--border); }
 
-  .section-label::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  .signals-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 36px;
-  }
-
+  .signals-grid { display:flex; flex-wrap:wrap; gap:9px; margin-bottom:32px; }
   .signal-chip {
-    background: rgba(0, 255, 157, 0.06);
-    border: 1px solid rgba(0, 255, 157, 0.2);
-    border-radius: 3px;
-    padding: 8px 14px;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: var(--accent2);
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    background:rgba(0,255,157,0.06); border:1px solid rgba(0,255,157,0.2);
+    border-radius:3px; padding:7px 13px; font-size:0.88rem; font-weight:500; color:var(--accent2);
   }
 
-  /* LOCATIONS GRID */
+  /* LOCATION CARDS */
   .locations-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 20px;
-    margin-bottom: 36px;
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));
+    gap:22px; margin-bottom:36px;
   }
-
   .loc-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    transition: border-color 0.2s, transform 0.2s;
-    position: relative;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; overflow:hidden;
+    transition:border-color 0.25s, transform 0.25s, box-shadow 0.25s;
   }
-
   .loc-card:hover {
-    border-color: var(--accent);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    border-color:var(--accent); transform:translateY(-3px);
+    box-shadow:0 10px 36px rgba(0,0,0,0.5), 0 0 20px rgba(0,212,255,0.08);
   }
 
-  .loc-card::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, rgba(0,212,255,0.03), transparent);
-    pointer-events: none;
+  /* Leaflet map */
+  .loc-map-wrap {
+    width:100%; height:220px; position:relative; background:#061018;
+  }
+  .loc-map-leaf { width:100%; height:100%; }
+
+  /* HUD overlays on map */
+  .map-hud {
+    position:absolute; inset:0; pointer-events:none; z-index:498;
+  }
+  .map-hud::before {
+    content:''; position:absolute; top:8px; left:8px;
+    width:20px; height:20px;
+    border-top:1px solid rgba(0,212,255,0.55); border-left:1px solid rgba(0,212,255,0.55);
+  }
+  .map-hud::after {
+    content:''; position:absolute; bottom:8px; right:8px;
+    width:20px; height:20px;
+    border-bottom:1px solid rgba(0,212,255,0.55); border-right:1px solid rgba(0,212,255,0.55);
+  }
+  .map-crosshair {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:22px; height:22px; pointer-events:none; z-index:499;
+  }
+  .map-crosshair::before, .map-crosshair::after {
+    content:''; position:absolute; background:rgba(0,212,255,0.65);
+  }
+  .map-crosshair::before { width:1px; height:100%; left:50%; top:0; }
+  .map-crosshair::after  { width:100%; height:1px; top:50%; left:0; }
+  .map-scan {
+    position:absolute; top:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg, transparent, rgba(0,212,255,0.55), transparent);
+    pointer-events:none; z-index:499; animation:mapscan 4s linear infinite;
+  }
+  @keyframes mapscan { from{top:0;opacity:1} to{top:100%;opacity:0} }
+
+  /* Layer toggle buttons */
+  .map-layer-btns {
+    position:absolute; top:8px; right:8px; z-index:500;
+    display:flex; flex-direction:column; gap:4px;
+  }
+  .layer-btn {
+    background:rgba(3,10,15,0.88); border:1px solid var(--border);
+    color:var(--text-dim); font-family:'Share Tech Mono',monospace;
+    font-size:0.58rem; letter-spacing:0.07em; padding:4px 8px;
+    cursor:pointer; border-radius:2px; transition:all 0.15s; white-space:nowrap;
+  }
+  .layer-btn.active, .layer-btn:hover {
+    border-color:var(--accent); color:var(--accent); background:rgba(0,212,255,0.1);
   }
 
-  .loc-map {
-    width: 100%;
-    height: 180px;
-    border: none;
-    display: block;
-    filter: saturate(0.7) brightness(0.85);
-    transition: filter 0.3s;
-  }
-
-  .loc-card:hover .loc-map {
-    filter: saturate(1) brightness(1);
-  }
-
-  .loc-body {
-    padding: 14px 16px;
-  }
-
-  .loc-name {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text);
-    margin-bottom: 6px;
-    line-height: 1.3;
-  }
-
+  /* Card body */
+  .loc-body { padding:13px 15px 15px; }
+  .loc-name { font-size:0.93rem; font-weight:600; color:var(--text); margin-bottom:5px; line-height:1.3; }
   .loc-coords {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.68rem;
-    color: var(--text-dim);
-    margin-bottom: 12px;
-    letter-spacing: 0.05em;
+    font-family:'Share Tech Mono',monospace; font-size:0.65rem;
+    color:var(--text-dim); margin-bottom:10px; letter-spacing:0.04em;
   }
-
-  .loc-links {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
+  .source-row { display:flex; gap:5px; flex-wrap:wrap; }
+  .src-badge {
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem;
+    letter-spacing:0.06em; padding:3px 8px; border-radius:2px; border:1px solid;
   }
+  .src-badge.esri  { color:#7ec8e3; border-color:rgba(126,200,227,0.3); }
+  .src-badge.sent  { color:var(--accent2); border-color:rgba(0,255,157,0.3); }
+  .src-badge.osm   { color:#f0a500; border-color:rgba(240,165,0,0.3); }
 
-  .loc-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 3px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.08em;
-    text-decoration: none;
-    transition: all 0.2s;
-    border: 1px solid;
-  }
-
-  .loc-link.sentinel {
-    color: var(--accent);
-    border-color: rgba(0, 212, 255, 0.3);
-    background: rgba(0, 212, 255, 0.05);
-  }
-
-  .loc-link.sentinel:hover {
-    background: rgba(0, 212, 255, 0.15);
-    box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
-  }
-
-  .loc-link.usgs {
-    color: var(--accent2);
-    border-color: rgba(0, 255, 157, 0.3);
-    background: rgba(0, 255, 157, 0.05);
-  }
-
-  .loc-link.usgs:hover {
-    background: rgba(0, 255, 157, 0.15);
-    box-shadow: 0 0 10px rgba(0, 255, 157, 0.2);
-  }
-
-  .loc-link.gmaps {
-    color: var(--accent3);
-    border-color: rgba(255, 107, 53, 0.3);
-    background: rgba(255, 107, 53, 0.05);
-  }
-
-  .loc-link.gmaps:hover {
-    background: rgba(255, 107, 53, 0.15);
-    box-shadow: 0 0 10px rgba(255, 107, 53, 0.2);
-  }
-
-  /* SCAN LINE EFFECT */
-  .scanline {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
-    animation: scan 6s linear infinite;
-    pointer-events: none;
-    z-index: 9999;
-  }
-
-  @keyframes scan {
-    from { top: 0; opacity: 1; }
-    to { top: 100vh; opacity: 0; }
-  }
-
-  /* FOOTER */
   footer {
-    position: relative;
-    z-index: 1;
-    text-align: center;
-    padding: 24px;
-    border-top: 1px solid var(--border);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.65rem;
-    color: var(--text-dim);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
+    position:relative; z-index:1; text-align:center; padding:22px;
+    border-top:1px solid var(--border);
+    font-family:'Share Tech Mono',monospace; font-size:0.62rem;
+    color:var(--text-dim); letter-spacing:0.15em; text-transform:uppercase;
   }
 
-  /* CORNER DECORATION */
-  .corner-deco {
-    position: fixed;
-    width: 80px;
-    height: 80px;
-    pointer-events: none;
-    z-index: 2;
-    opacity: 0.3;
-  }
+  /* Leaflet tweak: hide default attribution clutter */
+  .leaflet-control-attribution { display:none !important; }
 
-  .corner-deco.tl { top: 16px; left: 16px; border-top: 1px solid var(--accent); border-left: 1px solid var(--accent); }
-  .corner-deco.tr { top: 16px; right: 16px; border-top: 1px solid var(--accent); border-right: 1px solid var(--accent); }
-  .corner-deco.bl { bottom: 16px; left: 16px; border-bottom: 1px solid var(--accent); border-left: 1px solid var(--accent); }
-  .corner-deco.br { bottom: 16px; right: 16px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
-
-  @media (max-width: 600px) {
-    .header-inner { flex-direction: column; gap: 12px; }
-    .status-bar { font-size: 0.6rem; gap: 12px; }
-    .company-header { flex-direction: column; }
-    .search-headline { font-size: 1.6rem; }
-    .search-box { flex-direction: column; }
-    #ticker-input { border-right: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; }
-    #analyze-btn { border-radius: 0 0 4px 4px; }
-    .locations-grid { grid-template-columns: 1fr; }
+  @media (max-width:640px) {
+    .header-inner { flex-direction:column; gap:12px; }
+    .search-headline { font-size:1.55rem; }
+    .search-box { flex-direction:column; }
+    #ticker-input { border-right:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; }
+    #analyze-btn { border-radius:0 0 4px 4px; }
+    .locations-grid { grid-template-columns:1fr; }
+    .company-header { flex-direction:column; }
+    .status-bar { flex-wrap:wrap; gap:10px; }
   }
 </style>
 </head>
@@ -687,9 +362,9 @@ HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="status-bar">
-      <div class="status-item"><span class="status-dot"></span>S2 LIVE</div>
-      <div class="status-item"><span class="status-dot"></span>LANDSAT SYNC</div>
-      <div class="status-item"><span class="status-dot amber"></span>EO BROWSER</div>
+      <div class="status-item"><span class="status-dot"></span>ESRI IMAGERY LIVE</div>
+      <div class="status-item"><span class="status-dot"></span>S2 10M ACTIVE</div>
+      <div class="status-item"><span class="status-dot amber"></span>OSM OVERLAY</div>
     </div>
   </div>
 </header>
@@ -697,267 +372,304 @@ HTML = """<!DOCTYPE html>
 <div class="container">
 
   <div class="search-section">
-    <div class="search-title">// EQUITY SATELLITE MONITOR //</div>
+    <div class="search-eyebrow">// EQUITY SATELLITE MONITOR //</div>
     <div class="search-headline">Track Any Stock From Orbit</div>
-    <div class="search-desc">Enter a ticker to surface sector-relevant satellite imagery targets</div>
+    <div class="search-desc">Enter a ticker symbol to view live satellite imagery of sector monitoring targets</div>
     <div class="search-box">
-      <input type="text" id="ticker-input" placeholder="e.g. WMT, AMZN, XOM" maxlength="10" autocomplete="off" spellcheck="false" />
-      <button id="analyze-btn" onclick="analyze()">▶ SCAN</button>
+      <input type="text" id="ticker-input" placeholder="WMT, AMZN, XOM, TSLA…" maxlength="10" autocomplete="off" spellcheck="false" />
+      <button id="analyze-btn" onclick="analyze()">&#9654; SCAN</button>
     </div>
     <div id="error-box"></div>
   </div>
 
   <div id="loading">
     <div class="loader-orbit"></div>
-    <div class="loading-text">ACQUIRING SATELLITE TARGETS</div>
+    <div style="letter-spacing:0.12em">ACQUIRING SATELLITE TARGETS…</div>
   </div>
 
   <div id="results"></div>
 
 </div>
 
-<footer>SATINTEL v2.0 — EO BROWSER · SENTINEL-2 · LANDSAT 8/9 — DATA FOR RESEARCH PURPOSES ONLY</footer>
+<footer>SATINTEL v3.0 &nbsp;|&nbsp; ESRI WORLD IMAGERY · SENTINEL-2 · OSM &nbsp;|&nbsp; VISUAL ANALYSIS ONLY — NOT FOR TRADING</footer>
 
 <script>
-const input = document.getElementById('ticker-input');
-input.addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
+/* ─── MAP REGISTRY ────────────────────────────────────────────────────────── */
+const maps = {};   // mapId → { map, layers, current }
+
+/* ─── TILE DEFINITIONS (all free, no API key) ────────────────────────────── */
+function makeLayers() {
+  return {
+    esri: L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, attribution: 'Esri' }
+    ),
+    clarity: L.tileLayer(
+      'https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 21, attribution: 'Esri Clarity' }
+    ),
+    osm: L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { maxZoom: 19, attribution: 'OSM' }
+    ),
+    toner: L.tileLayer(
+      'https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}.png',
+      { maxZoom: 18, attribution: 'Stadia/Stamen' }
+    ),
+  };
+}
+
+function initMap(id, lat, lon) {
+  if (maps[id]) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  const map = L.map(el, {
+    center: [lat, lon], zoom: 17,
+    zoomControl: true,
+    attributionControl: false,
+    dragging: true,
+    scrollWheelZoom: false,
+    doubleClickZoom: true,
+  });
+
+  const layers = makeLayers();
+  layers.esri.addTo(map);
+  maps[id] = { map, layers, current: 'esri' };
+
+  // Ensure tiles render after DOM paint
+  setTimeout(() => map.invalidateSize(), 80);
+}
+
+function switchLayer(mapId, key) {
+  const reg = maps[mapId];
+  if (!reg || reg.current === key) return;
+  reg.map.removeLayer(reg.layers[reg.current]);
+  reg.layers[key].addTo(reg.map);
+  reg.current = key;
+
+  // Update button highlight
+  document.querySelectorAll(`[data-mapid="${mapId}"] .layer-btn`).forEach(b => {
+    b.classList.toggle('active', b.dataset.layer === key);
+  });
+}
+
+/* ─── ANALYZE ─────────────────────────────────────────────────────────────── */
+document.getElementById('ticker-input')
+  .addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
 
 async function analyze() {
-  const ticker = input.value.trim().toUpperCase();
-  if (!ticker) return shake(input);
+  const ticker = document.getElementById('ticker-input').value.trim().toUpperCase();
+  if (!ticker) { shake(document.getElementById('ticker-input')); return; }
 
-  const btn = document.getElementById('analyze-btn');
+  const btn     = document.getElementById('analyze-btn');
   const loading = document.getElementById('loading');
   const results = document.getElementById('results');
-  const errorBox = document.getElementById('error-box');
+  const errBox  = document.getElementById('error-box');
 
   btn.disabled = true;
   loading.style.display = 'block';
   results.style.display = 'none';
-  errorBox.style.display = 'none';
+  errBox.style.display  = 'none';
+  Object.keys(maps).forEach(k => delete maps[k]);
 
   try {
-    const res = await fetch('/analyze', {
+    const res  = await fetch('/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker })
     });
     const data = await res.json();
-
-    if (!res.ok || data.error) {
-      throw new Error(data.error || 'Unknown error');
-    }
-
-    renderResults(data);
-  } catch (err) {
-    errorBox.textContent = '⚠ ' + err.message;
-    errorBox.style.display = 'block';
+    if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
+    render(data);
+  } catch(err) {
+    errBox.textContent = '\u26a0  ' + err.message;
+    errBox.style.display = 'block';
   } finally {
     btn.disabled = false;
     loading.style.display = 'none';
   }
 }
 
-function renderResults(d) {
+/* ─── RENDER ──────────────────────────────────────────────────────────────── */
+function render(d) {
   const results = document.getElementById('results');
 
   const statsHtml = [
-    d.market_cap !== 'N/A' ? `<div class="stat"><div class="stat-val">${d.market_cap}</div><div class="stat-label">Market Cap</div></div>` : '',
-    d.employees !== 'N/A' ? `<div class="stat"><div class="stat-val">${d.employees}</div><div class="stat-label">Employees</div></div>` : '',
-    d.sector !== 'Unknown' ? `<div class="stat"><div class="stat-val" style="font-size:0.75rem;letter-spacing:0.05em">${d.sector}</div><div class="stat-label">Sector</div></div>` : '',
+    d.market_cap !== 'N/A'
+      ? `<div class="stat"><div class="stat-val">${x(d.market_cap)}</div><div class="stat-label">Mkt Cap</div></div>` : '',
+    d.employees  !== 'N/A'
+      ? `<div class="stat"><div class="stat-val" style="font-size:.9rem">${x(d.employees)}</div><div class="stat-label">Employees</div></div>` : '',
+    d.sector     !== 'Unknown'
+      ? `<div class="stat"><div class="stat-val sm">${x(d.sector)}</div><div class="stat-label">Sector</div></div>` : '',
   ].join('');
 
-  const signalsHtml = d.signals.map(s =>
-    `<div class="signal-chip">${s}</div>`
-  ).join('');
-
-  const locsHtml = d.locations.map(loc => `
-    <div class="loc-card">
-      <iframe class="loc-map"
-        loading="lazy"
-        referrerpolicy="no-referrer-when-downgrade"
-        src="${escHtml(loc.embed_map)}"
-        allowfullscreen></iframe>
-      <div class="loc-body">
-        <div class="loc-name">${escHtml(loc.name)}</div>
-        <div class="loc-coords">LAT ${loc.lat.toFixed(4)} / LON ${loc.lon.toFixed(4)}</div>
-        <div class="loc-links">
-          <a class="loc-link sentinel" href="${escHtml(loc.sentinel_link)}" target="_blank" rel="noopener">
-            🛰 SENTINEL-2
-          </a>
-          <a class="loc-link usgs" href="${escHtml(loc.usgs_link)}" target="_blank" rel="noopener">
-            🌍 USGS
-          </a>
-          <a class="loc-link gmaps" href="${escHtml(loc.google_maps_link)}" target="_blank" rel="noopener">
-            📍 MAPS
-          </a>
+  const locsHtml = d.locations.map((loc, i) => {
+    const mid = `map-${i}`;
+    return `
+      <div class="loc-card" data-mapid="${mid}">
+        <div class="loc-map-wrap">
+          <div id="${mid}" class="loc-map-leaf"></div>
+          <div class="map-hud"></div>
+          <div class="map-crosshair"></div>
+          <div class="map-scan"></div>
+          <div class="map-layer-btns">
+            <button class="layer-btn active" data-layer="esri"    onclick="switchLayer('${mid}','esri')">&#128752; ESRI SAT</button>
+            <button class="layer-btn"        data-layer="clarity" onclick="switchLayer('${mid}','clarity')">&#10024; CLARITY</button>
+            <button class="layer-btn"        data-layer="osm"     onclick="switchLayer('${mid}','osm')">&#128506; STREET</button>
+            <button class="layer-btn"        data-layer="toner"   onclick="switchLayer('${mid}','toner')">&#9632; B&amp;W</button>
+          </div>
         </div>
-      </div>
-    </div>
-  `).join('');
+        <div class="loc-body">
+          <div class="loc-name">${x(loc.name)}</div>
+          <div class="loc-coords">LAT ${loc.lat.toFixed(4)} &nbsp;/&nbsp; LON ${loc.lon.toFixed(4)} &nbsp;·&nbsp; ZOOM 17</div>
+          <div class="source-row">
+            <span class="src-badge esri">ESRI WORLD IMAGERY</span>
+            <span class="src-badge sent">SENTINEL-2 10M</span>
+            <span class="src-badge osm">OSM REFERENCE</span>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
 
   results.innerHTML = `
     <div class="company-card">
       <div class="company-header">
-        <div class="company-name-wrap">
-          <div class="ticker-badge">${escHtml(d.ticker)}</div>
-          <div class="company-name">${escHtml(d.company)}</div>
-          <div class="company-meta">${escHtml(d.industry)} · ${escHtml(d.hq_location)}</div>
+        <div>
+          <div class="ticker-badge">${x(d.ticker)}</div>
+          <div class="company-name">${x(d.company)}</div>
+          <div class="company-meta">${x(d.industry)} &nbsp;&middot;&nbsp; ${x(d.hq_location)}</div>
         </div>
         <div class="company-stats">${statsHtml}</div>
       </div>
-      ${d.description ? `<div class="company-desc">${escHtml(d.description)}</div>` : ''}
+      ${d.description ? `<div class="company-desc">${x(d.description)}</div>` : ''}
     </div>
 
     <div class="section-label">Satellite Monitoring Signals</div>
-    <div class="signals-grid">${signalsHtml}</div>
+    <div class="signals-grid">${d.signals.map(s=>`<div class="signal-chip">${x(s)}</div>`).join('')}</div>
 
-    <div class="section-label">Satellite Imagery Targets</div>
+    <div class="section-label">Live Satellite Imagery &mdash; ${x(d.sector)} Targets</div>
     <div class="locations-grid">${locsHtml}</div>
   `;
 
   results.style.display = 'block';
   results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Boot all Leaflet maps after DOM is in the page
+  requestAnimationFrame(() => {
+    d.locations.forEach((loc, i) => initMap(`map-${i}`, loc.lat, loc.lon));
+  });
 }
 
-function escHtml(str) {
-  if (typeof str !== 'string') return String(str ?? '');
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+/* ─── UTILS ───────────────────────────────────────────────────────────────── */
+function x(s) {
+  if (typeof s !== 'string') return String(s ?? '');
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
 function shake(el) {
-  el.style.animation = 'none';
-  el.offsetHeight;
-  el.style.animation = 'shakeInput 0.3s ease';
-  setTimeout(() => el.style.animation = '', 300);
+  el.animate(
+    [{transform:'translateX(0)'},{transform:'translateX(-7px)'},{transform:'translateX(7px)'},{transform:'translateX(0)'}],
+    {duration:280, iterations:2}
+  );
 }
 </script>
 </body>
 </html>"""
 
 
-# ─── Sector → Known satellite-monitorable location clusters ───────────────────
+# ─── Sector → Satellite-monitorable location clusters ──────────────────────
 SECTOR_LOCATIONS = {
     "Consumer Defensive": [
-        {"name": "Walmart Supercenter (Bentonville, AR)", "lat": 36.3729, "lon": -94.2088},
-        {"name": "Costco Warehouse (Issaquah, WA)", "lat": 47.5301, "lon": -122.0326},
-        {"name": "Target Store (Minneapolis, MN)", "lat": 44.9778, "lon": -93.2650},
-        {"name": "Kroger (Cincinnati, OH)", "lat": 39.1031, "lon": -84.5120},
+        {"name": "Walmart Supercenter (Bentonville, AR)", "lat": 36.3729,  "lon": -94.2088},
+        {"name": "Costco Warehouse (Issaquah, WA)",       "lat": 47.5301,  "lon": -122.0326},
+        {"name": "Target HQ (Minneapolis, MN)",           "lat": 44.9778,  "lon": -93.2650},
+        {"name": "Kroger (Cincinnati, OH)",                "lat": 39.1031,  "lon": -84.5120},
     ],
     "Consumer Cyclical": [
-        {"name": "Home Depot (Atlanta, GA)", "lat": 33.7490, "lon": -84.3880},
-        {"name": "AutoNation Dealership (Fort Lauderdale, FL)", "lat": 26.1224, "lon": -80.1373},
-        {"name": "AMC Movie Theater (Leawood, KS)", "lat": 38.9067, "lon": -94.6328},
-        {"name": "Lowe's Distribution (Mooresville, NC)", "lat": 35.5845, "lon": -80.8098},
+        {"name": "Home Depot HQ (Atlanta, GA)",              "lat": 33.7490, "lon": -84.3880},
+        {"name": "AutoNation Dealership (Fort Lauderdale)",  "lat": 26.1224, "lon": -80.1373},
+        {"name": "AMC Theater (Leawood, KS)",                "lat": 38.9067, "lon": -94.6328},
+        {"name": "Lowe's Distribution (Mooresville, NC)",    "lat": 35.5845, "lon": -80.8098},
     ],
     "Industrials": [
-        {"name": "Amazon Fulfillment Center (Robbinsville, NJ)", "lat": 40.2115, "lon": -74.5932},
-        {"name": "FedEx Hub (Memphis, TN)", "lat": 35.0423, "lon": -89.9762},
-        {"name": "UPS Hub (Louisville, KY)", "lat": 38.1781, "lon": -85.7360},
-        {"name": "Port of Los Angeles (San Pedro, CA)", "lat": 33.7361, "lon": -118.2922},
+        {"name": "Amazon Fulfillment (Robbinsville, NJ)",  "lat": 40.2115, "lon": -74.5932},
+        {"name": "FedEx Hub (Memphis, TN)",                "lat": 35.0423, "lon": -89.9762},
+        {"name": "UPS Hub (Louisville, KY)",               "lat": 38.1781, "lon": -85.7360},
+        {"name": "Port of Los Angeles (San Pedro, CA)",    "lat": 33.7361, "lon": -118.2922},
     ],
     "Energy": [
-        {"name": "Cushing Oil Storage (Cushing, OK)", "lat": 35.9823, "lon": -96.7665},
-        {"name": "Houston Ship Channel (Houston, TX)", "lat": 29.7372, "lon": -95.2707},
-        {"name": "Sabine Pass LNG Terminal (Cameron, LA)", "lat": 29.7286, "lon": -93.8700},
+        {"name": "Cushing Oil Storage (Cushing, OK)",      "lat": 35.9823, "lon": -96.7665},
+        {"name": "Houston Ship Channel (Houston, TX)",     "lat": 29.7372, "lon": -95.2707},
+        {"name": "Sabine Pass LNG Terminal (LA)",          "lat": 29.7286, "lon": -93.8700},
         {"name": "Permian Basin Oil Fields (Midland, TX)", "lat": 31.9973, "lon": -102.0779},
     ],
     "Basic Materials": [
-        {"name": "BHP Copper Mine (Escondida, Chile)", "lat": -24.2500, "lon": -69.0700},
-        {"name": "Nucor Steel Mill (Charlotte, NC)", "lat": 35.2271, "lon": -80.8431},
-        {"name": "Barrick Gold Mine (Elko, NV)", "lat": 40.8324, "lon": -115.7631},
-        {"name": "Albemarle Lithium (Kings Mountain, NC)", "lat": 35.2454, "lon": -81.3412},
+        {"name": "BHP Copper Mine (Escondida, Chile)",     "lat": -24.2500, "lon": -69.0700},
+        {"name": "Nucor Steel Mill (Charlotte, NC)",       "lat": 35.2271,  "lon": -80.8431},
+        {"name": "Barrick Gold Mine (Elko, NV)",           "lat": 40.8324,  "lon": -115.7631},
+        {"name": "Albemarle Lithium (Kings Mountain, NC)", "lat": 35.2454,  "lon": -81.3412},
     ],
     "Technology": [
         {"name": "Tesla Gigafactory Texas (Austin, TX)", "lat": 30.2240, "lon": -97.6180},
-        {"name": "Apple Campus (Cupertino, CA)", "lat": 37.3346, "lon": -122.0090},
-        {"name": "Amazon HQ (Seattle, WA)", "lat": 47.6159, "lon": -122.3360},
-        {"name": "TSMC Fab (Hsinchu, Taiwan)", "lat": 24.7814, "lon": 120.9969},
+        {"name": "Apple Park (Cupertino, CA)",           "lat": 37.3346, "lon": -122.0090},
+        {"name": "Amazon HQ (Seattle, WA)",              "lat": 47.6159, "lon": -122.3360},
+        {"name": "TSMC Fab (Hsinchu, Taiwan)",           "lat": 24.7814, "lon": 120.9969},
     ],
     "Real Estate": [
-        {"name": "Simon Mall (Indianapolis, IN)", "lat": 39.7684, "lon": -86.1581},
-        {"name": "Prologis Warehouse (Joliet, IL)", "lat": 41.5250, "lon": -88.0817},
-        {"name": "Public Storage (Glendale, CA)", "lat": 34.1425, "lon": -118.2551},
-        {"name": "CBRE Office Park (Dallas, TX)", "lat": 32.7767, "lon": -96.7970},
+        {"name": "Simon Mall (Indianapolis, IN)",     "lat": 39.7684, "lon": -86.1581},
+        {"name": "Prologis Warehouse (Joliet, IL)",   "lat": 41.5250, "lon": -88.0817},
+        {"name": "Public Storage (Glendale, CA)",     "lat": 34.1425, "lon": -118.2551},
+        {"name": "CBRE Office Park (Dallas, TX)",     "lat": 32.7767, "lon": -96.7970},
     ],
     "Healthcare": [
-        {"name": "Johnson & Johnson Campus (New Brunswick, NJ)", "lat": 40.4870, "lon": -74.4457},
-        {"name": "Pfizer HQ (New York, NY)", "lat": 40.7589, "lon": -73.9851},
-        {"name": "Mayo Clinic (Rochester, MN)", "lat": 44.0224, "lon": -92.4663},
-        {"name": "Cardinal Health DC (Dublin, OH)", "lat": 40.0992, "lon": -83.1141},
+        {"name": "J&J Campus (New Brunswick, NJ)", "lat": 40.4870, "lon": -74.4457},
+        {"name": "Mayo Clinic (Rochester, MN)",    "lat": 44.0224, "lon": -92.4663},
+        {"name": "Cardinal Health DC (Dublin, OH)","lat": 40.0992, "lon": -83.1141},
+        {"name": "McKesson HQ (Las Colinas, TX)",  "lat": 32.8709, "lon": -97.0570},
     ],
     "Financial Services": [
-        {"name": "NYSE (New York, NY)", "lat": 40.7069, "lon": -74.0089},
+        {"name": "NYSE (New York, NY)",              "lat": 40.7069, "lon": -74.0089},
         {"name": "Goldman Sachs HQ (New York, NY)", "lat": 40.7143, "lon": -74.0138},
-        {"name": "Berkshire HQ (Omaha, NE)", "lat": 41.2565, "lon": -95.9345},
-        {"name": "JPMorgan HQ (New York, NY)", "lat": 40.7525, "lon": -73.9773},
+        {"name": "Berkshire HQ (Omaha, NE)",         "lat": 41.2565, "lon": -95.9345},
+        {"name": "JPMorgan HQ (New York, NY)",       "lat": 40.7525, "lon": -73.9773},
     ],
     "Communication Services": [
         {"name": "Google Campus (Mountain View, CA)", "lat": 37.4220, "lon": -122.0841},
-        {"name": "Meta HQ (Menlo Park, CA)", "lat": 37.4845, "lon": -122.1477},
-        {"name": "AT&T HQ (Dallas, TX)", "lat": 32.7813, "lon": -96.7974},
-        {"name": "Netflix HQ (Los Gatos, CA)", "lat": 37.2358, "lon": -121.9624},
+        {"name": "Meta HQ (Menlo Park, CA)",          "lat": 37.4845, "lon": -122.1477},
+        {"name": "AT&T HQ (Dallas, TX)",              "lat": 32.7813, "lon": -96.7974},
+        {"name": "Netflix HQ (Los Gatos, CA)",        "lat": 37.2358, "lon": -121.9624},
     ],
     "Utilities": [
-        {"name": "Hoover Dam (Boulder City, NV)", "lat": 36.0161, "lon": -114.7377},
-        {"name": "Duke Energy Plant (Charlotte, NC)", "lat": 35.2271, "lon": -80.8431},
-        {"name": "NextEra Solar Farm (Blythe, CA)", "lat": 33.6173, "lon": -114.5965},
-        {"name": "Constellation Nuclear (Warrensville, OH)", "lat": 41.4331, "lon": -81.5129},
+        {"name": "Hoover Dam (Boulder City, NV)",      "lat": 36.0161, "lon": -114.7377},
+        {"name": "Duke Energy Plant (Charlotte, NC)",  "lat": 35.2271, "lon": -80.8431},
+        {"name": "NextEra Solar Farm (Blythe, CA)",    "lat": 33.6173, "lon": -114.5965},
+        {"name": "Constellation Nuclear (Perry, OH)",  "lat": 41.8000, "lon": -81.1434},
     ],
 }
 
 DEFAULT_LOCATIONS = [
     {"name": "Port of LA/Long Beach (CA)", "lat": 33.7361, "lon": -118.2922},
-    {"name": "Newark Airport Cargo (NJ)", "lat": 40.6895, "lon": -74.1745},
-    {"name": "Chicago O'Hare Cargo (IL)", "lat": 41.9742, "lon": -87.9073},
+    {"name": "Newark Airport Cargo (NJ)",  "lat": 40.6895, "lon": -74.1745},
+    {"name": "Chicago O'Hare Cargo (IL)",  "lat": 41.9742, "lon": -87.9073},
     {"name": "Dallas/Fort Worth Hub (TX)", "lat": 32.8998, "lon": -97.0403},
 ]
 
 SECTOR_SIGNALS = {
-    "Consumer Defensive": ["🅿️ Parking lot occupancy", "🚗 Vehicle count trends", "📦 Loading dock activity"],
-    "Consumer Cyclical": ["🅿️ Parking lot footfall", "🏗️ Construction progress", "🚗 Dealership lot inventory"],
-    "Industrials": ["📦 Container yard density", "🚢 Ship traffic at ports", "🏭 Factory roof heat signature"],
-    "Energy": ["🛢️ Oil storage tank shadow (volume)", "🚢 Tanker traffic", "🔥 Flare activity"],
-    "Basic Materials": ["⛏️ Mine excavation progress", "🏭 Plant smoke & steam", "📦 Stockpile size"],
-    "Technology": ["🏭 Gigafactory expansion", "🅿️ Campus employee count", "🏗️ Data center construction"],
-    "Real Estate": ["🅿️ Mall parking occupancy", "🏗️ Development progress", "🚗 Residential traffic"],
-    "Healthcare": ["🏥 Facility expansion", "🅿️ Hospital lot occupancy", "🏗️ Campus construction"],
-    "Financial Services": ["🏢 Office occupancy patterns", "🏗️ Building construction", "🚗 Commuter traffic"],
+    "Consumer Defensive":     ["🅿️ Parking lot occupancy", "🚗 Vehicle count trends", "📦 Loading dock activity"],
+    "Consumer Cyclical":      ["🅿️ Parking lot footfall", "🏗️ Construction progress", "🚗 Dealership lot inventory"],
+    "Industrials":            ["📦 Container yard density", "🚢 Ship traffic at ports", "🏭 Factory roof heat signature"],
+    "Energy":                 ["🛢️ Oil tank shadow volume", "🚢 Tanker traffic", "🔥 Flare activity"],
+    "Basic Materials":        ["⛏️ Mine excavation progress", "🏭 Plant steam & smoke", "📦 Stockpile size"],
+    "Technology":             ["🏭 Gigafactory expansion", "🅿️ Campus employee count", "🏗️ Data center construction"],
+    "Real Estate":            ["🅿️ Mall parking occupancy", "🏗️ Development progress", "🚗 Residential traffic"],
+    "Healthcare":             ["🏥 Facility expansion", "🅿️ Hospital lot occupancy", "🏗️ Campus construction"],
+    "Financial Services":     ["🏢 Office occupancy patterns", "🏗️ HQ construction", "🚗 Commuter traffic"],
     "Communication Services": ["🏗️ Data center expansion", "📡 Antenna arrays", "🅿️ Campus footfall"],
-    "Utilities": ["☀️ Solar farm output area", "💧 Reservoir water levels", "🌬️ Wind turbine arrays"],
+    "Utilities":              ["☀️ Solar farm output area", "💧 Reservoir water level", "🌬️ Wind turbine arrays"],
 }
 
 
-def make_sentinel_link(lat, lon):
-    return (
-        f"https://apps.sentinel-hub.com/eo-browser/"
-        f"?zoom=17&lat={lat}&lng={lon}"
-        f"&themeId=DEFAULT-THEME"
-        f"&visualizationUrl=https%3A%2F%2Fservices.sentinel-hub.com%2Fogc%2Fwms%2Fbd86bcc0-f318-402b-a145-015f85b9427e"
-        f"&datasetId=S2L2A"
-        f"&fromTime=2026-01-01T00%3A00%3A00.000Z"
-        f"&toTime=2026-04-22T23%3A59%3A59.999Z"
-        f"&layerId=1_TRUE_COLOR"
-    )
-
-
-def make_usgs_link(lat, lon):
-    return f"https://earthexplorer.usgs.gov/?center={lat},{lon}&zoom=15"
-
-
-def make_google_maps_link(lat, lon):
-    return f"https://www.google.com/maps/@{lat},{lon},17z/data=!3m1!1e3"
-
-
-def make_embed_map(lat, lon):
-    # Use OpenStreetMap embed (no API key needed, free, works on Vercel)
-    return (
-        f"https://www.openstreetmap.org/export/embed.html"
-        f"?bbox={lon-0.01}%2C{lat-0.01}%2C{lon+0.01}%2C{lat+0.01}"
-        f"&layer=mapnik&marker={lat}%2C{lon}"
-    )
-
-
+# ── ROUTES ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return HTML
@@ -965,67 +677,51 @@ def index():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    data = request.get_json(silent=True) or {}
-    ticker_symbol = data.get("ticker", "").strip().upper()
+    body = request.get_json(silent=True) or {}
+    ticker_symbol = body.get("ticker", "").strip().upper()
 
     if not ticker_symbol:
-        return jsonify({"error": "Ticker symbol is required"}), 400
+        return jsonify({"error": "Ticker symbol is required."}), 400
 
     try:
         ticker = yf.Ticker(ticker_symbol)
-        info = ticker.info or {}
+        info   = ticker.info or {}
     except Exception as e:
-        return jsonify({"error": f"Could not fetch ticker data: {str(e)}"}), 500
+        return jsonify({"error": f"Could not fetch ticker data: {e}"}), 500
 
-    # Validate we got real data
     company_name = info.get("longName") or info.get("shortName") or ""
     if not company_name and not info.get("sector"):
-        return jsonify({"error": f"No data found for ticker '{ticker_symbol}'. Please check the symbol."}), 404
+        return jsonify({"error": f"No data found for '{ticker_symbol}'. Check the symbol."}), 404
 
     company_name = company_name or ticker_symbol
-    sector = info.get("sector") or "Unknown"
-    industry = info.get("industry") or "Unknown"
-    hq_city = info.get("city") or ""
-    hq_state = info.get("state") or ""
-    hq_country = info.get("country") or ""
-    employees = info.get("fullTimeEmployees") or 0
-    market_cap = info.get("marketCap") or 0
-    description_raw = info.get("longBusinessSummary") or ""
-    description = (description_raw[:300] + "...") if len(description_raw) > 300 else description_raw
+    sector       = info.get("sector")   or "Unknown"
+    industry     = info.get("industry") or "Unknown"
+    hq_location  = ", ".join(filter(None, [
+        info.get("city") or "", info.get("state") or "", info.get("country") or ""
+    ]))
+    employees    = info.get("fullTimeEmployees") or 0
+    market_cap   = info.get("marketCap") or 0
+    desc_raw     = info.get("longBusinessSummary") or ""
+    description  = (desc_raw[:300] + "…") if len(desc_raw) > 300 else desc_raw
 
-    hq_location = ", ".join(filter(None, [hq_city, hq_state, hq_country]))
-
-    sector_targets = SECTOR_LOCATIONS.get(sector, DEFAULT_LOCATIONS)
-
-    locations = []
-    for loc in sector_targets:
-        locations.append({
-            "name": loc["name"],
-            "lat": loc["lat"],
-            "lon": loc["lon"],
-            "sentinel_link": make_sentinel_link(loc["lat"], loc["lon"]),
-            "usgs_link": make_usgs_link(loc["lat"], loc["lon"]),
-            "google_maps_link": make_google_maps_link(loc["lat"], loc["lon"]),
-            "embed_map": make_embed_map(loc["lat"], loc["lon"]),
-        })
-
-    signals = SECTOR_SIGNALS.get(sector, ["🛰️ General area activity", "🅿️ Parking patterns", "🚗 Traffic flow"])
+    targets   = SECTOR_LOCATIONS.get(sector, DEFAULT_LOCATIONS)
+    signals   = SECTOR_SIGNALS.get(
+        sector, ["🛰️ General area activity", "🅿️ Parking patterns", "🚗 Traffic flow"]
+    )
 
     return jsonify({
-        "ticker": ticker_symbol,
-        "company": company_name,
-        "sector": sector,
-        "industry": industry,
+        "ticker":      ticker_symbol,
+        "company":     company_name,
+        "sector":      sector,
+        "industry":    industry,
         "hq_location": hq_location,
-        "employees": f"{employees:,}" if employees else "N/A",
-        "market_cap": f"${market_cap / 1e9:.1f}B" if market_cap else "N/A",
+        "employees":   f"{employees:,}" if employees else "N/A",
+        "market_cap":  f"${market_cap / 1e9:.1f}B" if market_cap else "N/A",
         "description": description,
-        "signals": signals,
-        "locations": locations,
+        "signals":     signals,
+        "locations":   targets,
     })
 
 
-# Vercel needs the app object exposed at module level
-# For local dev:
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
