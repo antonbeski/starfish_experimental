@@ -168,6 +168,38 @@ HTML = r"""<!DOCTYPE html>
     max-width:500px; margin:14px auto 0; letter-spacing:0.05em;
   }
 
+  /* SECTOR PILLS */
+  .sector-browse {
+    margin-top:28px; text-align:center;
+  }
+  .sector-browse-label {
+    font-family:'Share Tech Mono',monospace; font-size:0.62rem;
+    letter-spacing:0.22em; color:var(--text-dim); text-transform:uppercase; margin-bottom:12px;
+  }
+  .sector-pills {
+    display:flex; flex-wrap:wrap; justify-content:center; gap:8px; max-width:900px; margin:0 auto;
+  }
+  .sector-pill {
+    display:flex; align-items:center; gap:7px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:3px; padding:8px 14px;
+    font-family:'Share Tech Mono',monospace; font-size:0.68rem; letter-spacing:0.07em;
+    color:var(--text-dim); cursor:pointer; transition:all 0.2s; white-space:nowrap;
+  }
+  .sector-pill:hover, .sector-pill.active {
+    border-color:var(--accent); color:var(--accent);
+    background:rgba(0,212,255,0.07); box-shadow:var(--glow);
+  }
+  .sector-pill .pill-icon { font-size:0.9rem; }
+  .sector-divider {
+    display:flex; align-items:center; gap:14px;
+    max-width:500px; margin:22px auto 0;
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem; letter-spacing:0.18em; color:var(--text-dim);
+  }
+  .sector-divider::before, .sector-divider::after {
+    content:''; flex:1; height:1px; background:var(--border);
+  }
+
   /* LOADING */
   #loading {
     display:none; text-align:center; padding:48px;
@@ -380,6 +412,25 @@ HTML = r"""<!DOCTYPE html>
       <button id="analyze-btn" onclick="analyze()">&#9654; SCAN</button>
     </div>
     <div id="error-box"></div>
+
+    <div class="sector-divider">OR BROWSE BY GICS SECTOR</div>
+
+    <div class="sector-browse">
+      <div class="sector-browse-label">// SELECT A SECTOR TO VIEW SATELLITE TARGETS //</div>
+      <div class="sector-pills">
+        <div class="sector-pill" onclick="browseSector('Energy')"><span class="pill-icon">🛢️</span>ENERGY</div>
+        <div class="sector-pill" onclick="browseSector('Basic Materials')"><span class="pill-icon">⛏️</span>BASIC MATERIALS</div>
+        <div class="sector-pill" onclick="browseSector('Industrials')"><span class="pill-icon">🏭</span>INDUSTRIALS</div>
+        <div class="sector-pill" onclick="browseSector('Consumer Cyclical')"><span class="pill-icon">🛍️</span>CONSUMER CYCLICAL</div>
+        <div class="sector-pill" onclick="browseSector('Consumer Defensive')"><span class="pill-icon">🛒</span>CONSUMER DEFENSIVE</div>
+        <div class="sector-pill" onclick="browseSector('Healthcare')"><span class="pill-icon">🏥</span>HEALTHCARE</div>
+        <div class="sector-pill" onclick="browseSector('Financial Services')"><span class="pill-icon">🏦</span>FINANCIAL SERVICES</div>
+        <div class="sector-pill" onclick="browseSector('Technology')"><span class="pill-icon">💻</span>TECHNOLOGY</div>
+        <div class="sector-pill" onclick="browseSector('Communication Services')"><span class="pill-icon">📡</span>COMMUNICATION SVCS</div>
+        <div class="sector-pill" onclick="browseSector('Utilities')"><span class="pill-icon">⚡</span>UTILITIES</div>
+        <div class="sector-pill" onclick="browseSector('Real Estate')"><span class="pill-icon">🏢</span>REAL ESTATE</div>
+      </div>
+    </div>
   </div>
 
   <div id="loading">
@@ -561,6 +612,99 @@ function render(d) {
   });
 }
 
+/* ─── BROWSE BY SECTOR ────────────────────────────────────────────────────── */
+async function browseSector(sectorName) {
+  // Highlight active pill
+  document.querySelectorAll('.sector-pill').forEach(p => {
+    p.classList.toggle('active', p.textContent.trim().toLowerCase().includes(sectorName.toLowerCase().split(' ')[0]));
+  });
+
+  const loading = document.getElementById('loading');
+  const results = document.getElementById('results');
+  const errBox  = document.getElementById('error-box');
+
+  loading.style.display = 'block';
+  results.style.display = 'none';
+  errBox.style.display  = 'none';
+  Object.keys(maps).forEach(k => delete maps[k]);
+
+  // Clear ticker input to avoid confusion
+  document.getElementById('ticker-input').value = '';
+
+  try {
+    const res  = await fetch('/sector', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sector: sectorName })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
+    renderSector(data);
+  } catch(err) {
+    errBox.textContent = '\u26a0  ' + err.message;
+    errBox.style.display = 'block';
+  } finally {
+    loading.style.display = 'none';
+  }
+}
+
+function renderSector(d) {
+  const results = document.getElementById('results');
+
+  const locsHtml = d.locations.map((loc, i) => {
+    const mid = `map-${i}`;
+    return `
+      <div class="loc-card" data-mapid="${mid}">
+        <div class="loc-map-wrap">
+          <div id="${mid}" class="loc-map-leaf"></div>
+          <div class="map-hud"></div>
+          <div class="map-crosshair"></div>
+          <div class="map-scan"></div>
+          <div class="map-layer-btns">
+            <button class="layer-btn active" data-layer="esri"    onclick="switchLayer('${mid}','esri')">&#128752; ESRI SAT</button>
+            <button class="layer-btn"        data-layer="clarity" onclick="switchLayer('${mid}','clarity')">&#10024; CLARITY</button>
+            <button class="layer-btn"        data-layer="osm"     onclick="switchLayer('${mid}','osm')">&#128506; STREET</button>
+            <button class="layer-btn"        data-layer="toner"   onclick="switchLayer('${mid}','toner')">&#9632; B&amp;W</button>
+          </div>
+        </div>
+        <div class="loc-body">
+          <div class="loc-name">${x(loc.name)}</div>
+          <div class="loc-coords">LAT ${loc.lat.toFixed(4)} &nbsp;/&nbsp; LON ${loc.lon.toFixed(4)} &nbsp;·&nbsp; ZOOM 17</div>
+          <div class="source-row">
+            <span class="src-badge esri">ESRI WORLD IMAGERY</span>
+            <span class="src-badge sent">SENTINEL-2 10M</span>
+            <span class="src-badge osm">OSM REFERENCE</span>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  results.innerHTML = `
+    <div class="company-card">
+      <div class="company-header">
+        <div>
+          <div class="ticker-badge">GICS SECTOR</div>
+          <div class="company-name">${x(d.sector)}</div>
+          <div class="company-meta">GICS Classification &nbsp;&middot;&nbsp; ${d.locations.length} Satellite Targets</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">Satellite Monitoring Signals</div>
+    <div class="signals-grid">${d.signals.map(s=>`<div class="signal-chip">${x(s)}</div>`).join('')}</div>
+
+    <div class="section-label">Live Satellite Imagery &mdash; ${x(d.sector)} Targets</div>
+    <div class="locations-grid">${locsHtml}</div>
+  `;
+
+  results.style.display = 'block';
+  results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  requestAnimationFrame(() => {
+    d.locations.forEach((loc, i) => initMap(`map-${i}`, loc.lat, loc.lon));
+  });
+}
+
 /* ─── UTILS ───────────────────────────────────────────────────────────────── */
 function x(s) {
   if (typeof s !== 'string') return String(s ?? '');
@@ -720,6 +864,29 @@ def analyze():
         "description": description,
         "signals":     signals,
         "locations":   targets,
+    })
+
+
+@app.route("/sector", methods=["POST"])
+def sector_browse():
+    body = request.get_json(silent=True) or {}
+    sector_name = body.get("sector", "").strip()
+
+    if not sector_name:
+        return jsonify({"error": "Sector name is required."}), 400
+
+    targets = SECTOR_LOCATIONS.get(sector_name, DEFAULT_LOCATIONS)
+    signals = SECTOR_SIGNALS.get(
+        sector_name, ["🛰️ General area activity", "🅿️ Parking patterns", "🚗 Traffic flow"]
+    )
+
+    if sector_name not in SECTOR_LOCATIONS:
+        return jsonify({"error": f"Unknown sector: '{sector_name}'."}), 404
+
+    return jsonify({
+        "sector":    sector_name,
+        "signals":   signals,
+        "locations": targets,
     })
 
 
