@@ -1,10 +1,10 @@
 """
-Satellite Intelligence Flask App - Single File with Embedded HTML
+SATINTEL — Satellite Intelligence Platform
+Sector-only browsing | GICS 11 sectors | 12 expanded footage targets per sector
 Vercel-compatible | Inline satellite maps via Leaflet.js (no API keys)
 """
 
 from flask import Flask, request, jsonify
-import yfinance as yf
 
 app = Flask(__name__)
 
@@ -73,20 +73,17 @@ HTML = r"""<!DOCTYPE html>
   header {
     position:relative; z-index:1;
     padding:28px 28px 0;
-    max-width:1300px; margin:0 auto 36px;
+    max-width:1400px; margin:0 auto 32px;
   }
   .header-inner {
-    display:flex; align-items:center;
-    justify-content:space-between;
+    display:flex; align-items:center; justify-content:space-between;
     border-bottom:1px solid var(--border); padding-bottom:18px;
   }
   .logo { display:flex; align-items:center; gap:14px; }
   .logo-icon {
-    width:42px; height:42px;
-    border:2px solid var(--accent); border-radius:50%;
+    width:42px; height:42px; border:2px solid var(--accent); border-radius:50%;
     display:flex; align-items:center; justify-content:center;
-    box-shadow:var(--glow);
-    animation:spin 10s linear infinite; position:relative;
+    box-shadow:var(--glow); animation:spin 10s linear infinite; position:relative;
   }
   .logo-icon::before {
     content:''; position:absolute; inset:5px; border-radius:50%;
@@ -115,90 +112,52 @@ HTML = r"""<!DOCTYPE html>
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
   /* CONTAINER */
-  .container {
-    position:relative; z-index:1;
-    max-width:1300px; margin:0 auto;
-    padding:0 28px 60px;
-  }
+  .container { position:relative; z-index:1; max-width:1400px; margin:0 auto; padding:0 28px 60px; }
 
-  /* SEARCH */
-  .search-section { text-align:center; margin-bottom:48px; }
-  .search-eyebrow {
-    font-family:'Orbitron',monospace; font-size:0.68rem;
-    letter-spacing:0.3em; color:var(--text-dim); text-transform:uppercase; margin-bottom:10px;
+  /* SECTOR PANEL */
+  .sector-panel { margin-bottom:40px; }
+  .panel-eyebrow {
+    font-family:'Orbitron',monospace; font-size:0.65rem;
+    letter-spacing:0.3em; color:var(--text-dim); text-transform:uppercase;
+    margin-bottom:8px; text-align:center;
   }
-  .search-headline {
-    font-size:2.1rem; font-weight:700; line-height:1.1; margin-bottom:8px;
+  .panel-headline {
+    font-size:2rem; font-weight:700; line-height:1.1; margin-bottom:6px; text-align:center;
     background:linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
   }
-  .search-desc { color:var(--text-dim); font-size:1rem; font-weight:300; margin-bottom:28px; }
-  .search-box { display:flex; max-width:500px; margin:0 auto; position:relative; }
-  .search-box::before {
-    content:'TICKER'; position:absolute; left:14px; top:50%; transform:translateY(-50%);
-    font-family:'Share Tech Mono',monospace; font-size:0.58rem; letter-spacing:0.15em;
-    color:var(--text-dim); z-index:2; pointer-events:none;
-  }
-  #ticker-input {
-    flex:1; background:var(--surface); border:1px solid var(--border); border-right:none;
-    color:var(--accent); font-family:'Orbitron',monospace; font-size:1.05rem; font-weight:700;
-    letter-spacing:0.15em; padding:15px 14px 15px 72px; outline:none; text-transform:uppercase;
-    transition:border-color 0.2s, box-shadow 0.2s; border-radius:4px 0 0 4px;
-  }
-  #ticker-input::placeholder { color:var(--text-dim); font-size:0.8rem; }
-  #ticker-input:focus { border-color:var(--accent); box-shadow:var(--glow); }
-  #analyze-btn {
-    background:var(--accent); color:var(--bg); border:none;
-    padding:15px 24px; font-family:'Orbitron',monospace; font-size:0.7rem; font-weight:700;
-    letter-spacing:0.15em; cursor:pointer; transition:all 0.2s;
-    border-radius:0 4px 4px 0; white-space:nowrap; overflow:hidden; position:relative;
-  }
-  #analyze-btn::after {
-    content:''; position:absolute; inset:0;
-    background:rgba(255,255,255,0.12); transform:translateX(-100%); transition:transform 0.3s;
-  }
-  #analyze-btn:hover::after { transform:translateX(0); }
-  #analyze-btn:hover { box-shadow:var(--glow); }
-  #analyze-btn:disabled { opacity:0.5; cursor:not-allowed; }
+  .panel-desc { color:var(--text-dim); font-size:0.95rem; font-weight:300; margin-bottom:26px; text-align:center; }
 
-  #error-box {
-    display:none; background:rgba(255,56,96,0.08);
-    border:1px solid var(--danger); border-radius:4px; padding:12px 16px;
-    font-family:'Share Tech Mono',monospace; font-size:0.78rem; color:var(--danger);
-    max-width:500px; margin:14px auto 0; letter-spacing:0.05em;
+  .gics-grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap:10px;
   }
-
-  /* SECTOR PILLS */
-  .sector-browse {
-    margin-top:28px; text-align:center;
-  }
-  .sector-browse-label {
-    font-family:'Share Tech Mono',monospace; font-size:0.62rem;
-    letter-spacing:0.22em; color:var(--text-dim); text-transform:uppercase; margin-bottom:12px;
-  }
-  .sector-pills {
-    display:flex; flex-wrap:wrap; justify-content:center; gap:8px; max-width:900px; margin:0 auto;
-  }
-  .sector-pill {
-    display:flex; align-items:center; gap:7px;
+  .gics-card {
     background:var(--surface); border:1px solid var(--border);
-    border-radius:3px; padding:8px 14px;
-    font-family:'Share Tech Mono',monospace; font-size:0.68rem; letter-spacing:0.07em;
-    color:var(--text-dim); cursor:pointer; transition:all 0.2s; white-space:nowrap;
+    border-radius:5px; padding:16px 18px;
+    cursor:pointer; transition:all 0.22s;
+    display:flex; flex-direction:column; gap:6px;
+    position:relative; overflow:hidden;
   }
-  .sector-pill:hover, .sector-pill.active {
-    border-color:var(--accent); color:var(--accent);
-    background:rgba(0,212,255,0.07); box-shadow:var(--glow);
+  .gics-card::before {
+    content:''; position:absolute; top:0; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity:0; transition:opacity 0.22s;
   }
-  .sector-pill .pill-icon { font-size:0.9rem; }
-  .sector-divider {
-    display:flex; align-items:center; gap:14px;
-    max-width:500px; margin:22px auto 0;
-    font-family:'Share Tech Mono',monospace; font-size:0.6rem; letter-spacing:0.18em; color:var(--text-dim);
+  .gics-card:hover::before, .gics-card.active::before { opacity:1; }
+  .gics-card:hover, .gics-card.active {
+    border-color:var(--accent); background:rgba(0,212,255,0.06);
+    transform:translateY(-2px);
+    box-shadow:0 8px 28px rgba(0,0,0,0.4), var(--glow);
   }
-  .sector-divider::before, .sector-divider::after {
-    content:''; flex:1; height:1px; background:var(--border);
+  .gics-icon { font-size:1.5rem; line-height:1; }
+  .gics-name {
+    font-family:'Orbitron',monospace; font-size:0.58rem;
+    letter-spacing:0.1em; color:var(--accent); text-transform:uppercase; font-weight:700;
   }
+  .gics-count { font-family:'Share Tech Mono',monospace; font-size:0.6rem; color:var(--text-dim); }
+  .gics-card.active .gics-count { color:var(--accent2); }
 
   /* LOADING */
   #loading {
@@ -207,8 +166,7 @@ HTML = r"""<!DOCTYPE html>
     font-size:0.82rem; letter-spacing:0.1em;
   }
   .loader-orbit {
-    width:48px; height:48px;
-    border:2px solid var(--border); border-top-color:var(--accent);
+    width:48px; height:48px; border:2px solid var(--border); border-top-color:var(--accent);
     border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 14px;
   }
 
@@ -216,41 +174,35 @@ HTML = r"""<!DOCTYPE html>
   #results { display:none; animation:fadeUp 0.5s ease-out; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
 
-  /* Company card */
-  .company-card {
+  .sector-header-card {
     background:var(--surface); border:1px solid var(--border);
-    border-radius:6px; padding:26px 30px; margin-bottom:30px;
+    border-radius:6px; padding:22px 28px; margin-bottom:26px;
     position:relative; overflow:hidden;
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px;
   }
-  .company-card::before {
+  .sector-header-card::before {
     content:''; position:absolute; top:0; left:0; right:0; height:2px;
     background:linear-gradient(90deg, transparent, var(--accent), transparent);
   }
-  .company-header {
-    display:flex; align-items:flex-start; justify-content:space-between;
-    gap:20px; flex-wrap:wrap; margin-bottom:18px;
-  }
-  .ticker-badge {
-    display:inline-block; font-family:'Orbitron',monospace; font-size:0.62rem;
+  .sector-title-group { display:flex; align-items:center; gap:16px; }
+  .sector-big-icon { font-size:2.4rem; line-height:1; }
+  .sector-badge {
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem;
     letter-spacing:0.2em; color:var(--accent); background:rgba(0,212,255,0.08);
-    border:1px solid rgba(0,212,255,0.3); padding:3px 9px; border-radius:2px; margin-bottom:7px;
+    border:1px solid rgba(0,212,255,0.3); padding:3px 10px; border-radius:2px;
+    margin-bottom:6px; display:inline-block;
   }
-  .company-name { font-size:1.7rem; font-weight:700; color:var(--text); margin-bottom:4px; }
-  .company-meta { font-size:0.88rem; color:var(--text-dim); }
-  .company-stats { display:flex; gap:22px; flex-wrap:wrap; }
+  .sector-name-big { font-size:1.7rem; font-weight:700; color:var(--text); }
+  .sector-sub { font-size:0.88rem; color:var(--text-dim); margin-top:3px; }
+  .sector-stats { display:flex; gap:24px; flex-wrap:wrap; }
   .stat { text-align:center; }
   .stat-val {
-    font-family:'Orbitron',monospace; font-size:1.05rem; font-weight:700;
+    font-family:'Orbitron',monospace; font-size:1.1rem; font-weight:700;
     color:var(--accent2); text-shadow:var(--glow2);
   }
-  .stat-val.sm { font-size:0.75rem; letter-spacing:0.04em; }
   .stat-label {
-    font-size:0.68rem; color:var(--text-dim); letter-spacing:0.1em;
+    font-size:0.65rem; color:var(--text-dim); letter-spacing:0.1em;
     text-transform:uppercase; font-family:'Share Tech Mono',monospace; margin-top:2px;
-  }
-  .company-desc {
-    font-size:0.93rem; color:var(--text-dim); line-height:1.6;
-    font-weight:300; border-top:1px solid var(--border); padding-top:14px;
   }
 
   .section-label {
@@ -269,8 +221,8 @@ HTML = r"""<!DOCTYPE html>
   /* LOCATION CARDS */
   .locations-grid {
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));
-    gap:22px; margin-bottom:36px;
+    grid-template-columns:repeat(auto-fill, minmax(310px, 1fr));
+    gap:18px; margin-bottom:36px;
   }
   .loc-card {
     background:var(--surface); border:1px solid var(--border);
@@ -281,25 +233,16 @@ HTML = r"""<!DOCTYPE html>
     border-color:var(--accent); transform:translateY(-3px);
     box-shadow:0 10px 36px rgba(0,0,0,0.5), 0 0 20px rgba(0,212,255,0.08);
   }
-
-  /* Leaflet map */
-  .loc-map-wrap {
-    width:100%; height:220px; position:relative; background:#061018;
-  }
+  .loc-map-wrap { width:100%; height:200px; position:relative; background:#061018; }
   .loc-map-leaf { width:100%; height:100%; }
 
-  /* HUD overlays on map */
-  .map-hud {
-    position:absolute; inset:0; pointer-events:none; z-index:498;
-  }
+  .map-hud { position:absolute; inset:0; pointer-events:none; z-index:498; }
   .map-hud::before {
-    content:''; position:absolute; top:8px; left:8px;
-    width:20px; height:20px;
+    content:''; position:absolute; top:8px; left:8px; width:20px; height:20px;
     border-top:1px solid rgba(0,212,255,0.55); border-left:1px solid rgba(0,212,255,0.55);
   }
   .map-hud::after {
-    content:''; position:absolute; bottom:8px; right:8px;
-    width:20px; height:20px;
+    content:''; position:absolute; bottom:8px; right:8px; width:20px; height:20px;
     border-bottom:1px solid rgba(0,212,255,0.55); border-right:1px solid rgba(0,212,255,0.55);
   }
   .map-crosshair {
@@ -318,7 +261,6 @@ HTML = r"""<!DOCTYPE html>
   }
   @keyframes mapscan { from{top:0;opacity:1} to{top:100%;opacity:0} }
 
-  /* Layer toggle buttons */
   .map-layer-btns {
     position:absolute; top:8px; right:8px; z-index:500;
     display:flex; flex-direction:column; gap:4px;
@@ -326,24 +268,29 @@ HTML = r"""<!DOCTYPE html>
   .layer-btn {
     background:rgba(3,10,15,0.88); border:1px solid var(--border);
     color:var(--text-dim); font-family:'Share Tech Mono',monospace;
-    font-size:0.58rem; letter-spacing:0.07em; padding:4px 8px;
+    font-size:0.55rem; letter-spacing:0.07em; padding:4px 8px;
     cursor:pointer; border-radius:2px; transition:all 0.15s; white-space:nowrap;
   }
   .layer-btn.active, .layer-btn:hover {
     border-color:var(--accent); color:var(--accent); background:rgba(0,212,255,0.1);
   }
 
-  /* Card body */
-  .loc-body { padding:13px 15px 15px; }
-  .loc-name { font-size:0.93rem; font-weight:600; color:var(--text); margin-bottom:5px; line-height:1.3; }
+  .loc-body { padding:12px 14px 14px; }
+  .loc-name { font-size:0.9rem; font-weight:600; color:var(--text); margin-bottom:4px; line-height:1.3; }
+  .loc-tag {
+    font-family:'Share Tech Mono',monospace; font-size:0.58rem;
+    color:var(--accent3); letter-spacing:0.06em; margin-bottom:6px;
+    display:inline-block; background:rgba(255,107,53,0.1);
+    border:1px solid rgba(255,107,53,0.25); padding:2px 7px; border-radius:2px;
+  }
   .loc-coords {
-    font-family:'Share Tech Mono',monospace; font-size:0.65rem;
-    color:var(--text-dim); margin-bottom:10px; letter-spacing:0.04em;
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem;
+    color:var(--text-dim); margin-bottom:9px; letter-spacing:0.04em;
   }
   .source-row { display:flex; gap:5px; flex-wrap:wrap; }
   .src-badge {
-    font-family:'Share Tech Mono',monospace; font-size:0.6rem;
-    letter-spacing:0.06em; padding:3px 8px; border-radius:2px; border:1px solid;
+    font-family:'Share Tech Mono',monospace; font-size:0.57rem;
+    letter-spacing:0.06em; padding:2px 7px; border-radius:2px; border:1px solid;
   }
   .src-badge.esri  { color:#7ec8e3; border-color:rgba(126,200,227,0.3); }
   .src-badge.sent  { color:var(--accent2); border-color:rgba(0,255,157,0.3); }
@@ -355,18 +302,14 @@ HTML = r"""<!DOCTYPE html>
     font-family:'Share Tech Mono',monospace; font-size:0.62rem;
     color:var(--text-dim); letter-spacing:0.15em; text-transform:uppercase;
   }
-
-  /* Leaflet tweak: hide default attribution clutter */
   .leaflet-control-attribution { display:none !important; }
 
-  @media (max-width:640px) {
+  @media (max-width:700px) {
     .header-inner { flex-direction:column; gap:12px; }
-    .search-headline { font-size:1.55rem; }
-    .search-box { flex-direction:column; }
-    #ticker-input { border-right:1px solid var(--border); border-bottom:none; border-radius:4px 4px 0 0; }
-    #analyze-btn { border-radius:0 0 4px 4px; }
+    .panel-headline { font-size:1.5rem; }
+    .gics-grid { grid-template-columns: repeat(2, 1fr); }
     .locations-grid { grid-template-columns:1fr; }
-    .company-header { flex-direction:column; }
+    .sector-header-card { flex-direction:column; }
     .status-bar { flex-wrap:wrap; gap:10px; }
   }
 </style>
@@ -403,32 +346,66 @@ HTML = r"""<!DOCTYPE html>
 
 <div class="container">
 
-  <div class="search-section">
-    <div class="search-eyebrow">// EQUITY SATELLITE MONITOR //</div>
-    <div class="search-headline">Track Any Stock From Orbit</div>
-    <div class="search-desc">Enter a ticker symbol to view live satellite imagery of sector monitoring targets</div>
-    <div class="search-box">
-      <input type="text" id="ticker-input" placeholder="WMT, AMZN, XOM, TSLA…" maxlength="10" autocomplete="off" spellcheck="false" />
-      <button id="analyze-btn" onclick="analyze()">&#9654; SCAN</button>
-    </div>
-    <div id="error-box"></div>
+  <div class="sector-panel">
+    <div class="panel-eyebrow">// GICS SECTOR SATELLITE MONITOR //</div>
+    <div class="panel-headline">Select a Sector — View From Orbit</div>
+    <div class="panel-desc">Choose any of the 11 GICS sectors to load all satellite monitoring targets</div>
 
-    <div class="sector-divider">OR BROWSE BY GICS SECTOR</div>
-
-    <div class="sector-browse">
-      <div class="sector-browse-label">// SELECT A SECTOR TO VIEW SATELLITE TARGETS //</div>
-      <div class="sector-pills">
-        <div class="sector-pill" onclick="browseSector('Energy')"><span class="pill-icon">🛢️</span>ENERGY</div>
-        <div class="sector-pill" onclick="browseSector('Basic Materials')"><span class="pill-icon">⛏️</span>BASIC MATERIALS</div>
-        <div class="sector-pill" onclick="browseSector('Industrials')"><span class="pill-icon">🏭</span>INDUSTRIALS</div>
-        <div class="sector-pill" onclick="browseSector('Consumer Cyclical')"><span class="pill-icon">🛍️</span>CONSUMER CYCLICAL</div>
-        <div class="sector-pill" onclick="browseSector('Consumer Defensive')"><span class="pill-icon">🛒</span>CONSUMER DEFENSIVE</div>
-        <div class="sector-pill" onclick="browseSector('Healthcare')"><span class="pill-icon">🏥</span>HEALTHCARE</div>
-        <div class="sector-pill" onclick="browseSector('Financial Services')"><span class="pill-icon">🏦</span>FINANCIAL SERVICES</div>
-        <div class="sector-pill" onclick="browseSector('Technology')"><span class="pill-icon">💻</span>TECHNOLOGY</div>
-        <div class="sector-pill" onclick="browseSector('Communication Services')"><span class="pill-icon">📡</span>COMMUNICATION SVCS</div>
-        <div class="sector-pill" onclick="browseSector('Utilities')"><span class="pill-icon">⚡</span>UTILITIES</div>
-        <div class="sector-pill" onclick="browseSector('Real Estate')"><span class="pill-icon">🏢</span>REAL ESTATE</div>
+    <div class="gics-grid" id="gics-grid">
+      <div class="gics-card" onclick="browseSector('Energy')" data-sector="Energy">
+        <div class="gics-icon">🛢️</div>
+        <div class="gics-name">Energy</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Basic Materials')" data-sector="Basic Materials">
+        <div class="gics-icon">⛏️</div>
+        <div class="gics-name">Basic Materials</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Industrials')" data-sector="Industrials">
+        <div class="gics-icon">🏭</div>
+        <div class="gics-name">Industrials</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Consumer Cyclical')" data-sector="Consumer Cyclical">
+        <div class="gics-icon">🛍️</div>
+        <div class="gics-name">Consumer Cyclical</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Consumer Defensive')" data-sector="Consumer Defensive">
+        <div class="gics-icon">🛒</div>
+        <div class="gics-name">Consumer Defensive</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Healthcare')" data-sector="Healthcare">
+        <div class="gics-icon">🏥</div>
+        <div class="gics-name">Healthcare</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Financial Services')" data-sector="Financial Services">
+        <div class="gics-icon">🏦</div>
+        <div class="gics-name">Financial Services</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Technology')" data-sector="Technology">
+        <div class="gics-icon">💻</div>
+        <div class="gics-name">Technology</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Communication Services')" data-sector="Communication Services">
+        <div class="gics-icon">📡</div>
+        <div class="gics-name">Communication Services</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Utilities')" data-sector="Utilities">
+        <div class="gics-icon">⚡</div>
+        <div class="gics-name">Utilities</div>
+        <div class="gics-count">12 targets</div>
+      </div>
+      <div class="gics-card" onclick="browseSector('Real Estate')" data-sector="Real Estate">
+        <div class="gics-icon">🏢</div>
+        <div class="gics-name">Real Estate</div>
+        <div class="gics-count">12 targets</div>
       </div>
     </div>
   </div>
@@ -442,30 +419,28 @@ HTML = r"""<!DOCTYPE html>
 
 </div>
 
-<footer>SATINTEL v3.0 &nbsp;|&nbsp; ESRI WORLD IMAGERY · SENTINEL-2 · OSM &nbsp;|&nbsp; VISUAL ANALYSIS ONLY — NOT FOR TRADING</footer>
+<footer>SATINTEL v4.0 &nbsp;|&nbsp; ESRI WORLD IMAGERY · SENTINEL-2 · OSM &nbsp;|&nbsp; GICS 11-SECTOR COVERAGE &nbsp;|&nbsp; VISUAL ANALYSIS ONLY</footer>
 
 <script>
-/* ─── MAP REGISTRY ────────────────────────────────────────────────────────── */
-const maps = {};   // mapId → { map, layers, current }
+const maps = {};
 
-/* ─── TILE DEFINITIONS (all free, no API key) ────────────────────────────── */
 function makeLayers() {
   return {
     esri: L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, attribution: 'Esri' }
+      { maxZoom: 19 }
     ),
     clarity: L.tileLayer(
       'https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 21, attribution: 'Esri Clarity' }
+      { maxZoom: 21 }
     ),
     osm: L.tileLayer(
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { maxZoom: 19, attribution: 'OSM' }
+      { maxZoom: 19 }
     ),
     toner: L.tileLayer(
       'https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}.png',
-      { maxZoom: 18, attribution: 'Stadia/Stamen' }
+      { maxZoom: 18 }
     ),
   };
 }
@@ -474,21 +449,14 @@ function initMap(id, lat, lon) {
   if (maps[id]) return;
   const el = document.getElementById(id);
   if (!el) return;
-
   const map = L.map(el, {
-    center: [lat, lon], zoom: 17,
-    zoomControl: true,
-    attributionControl: false,
-    dragging: true,
-    scrollWheelZoom: false,
-    doubleClickZoom: true,
+    center: [lat, lon], zoom: 16,
+    zoomControl: true, attributionControl: false,
+    dragging: true, scrollWheelZoom: false, doubleClickZoom: true,
   });
-
   const layers = makeLayers();
   layers.esri.addTo(map);
   maps[id] = { map, layers, current: 'esri' };
-
-  // Ensure tiles render after DOM paint
   setTimeout(() => map.invalidateSize(), 80);
 }
 
@@ -498,138 +466,29 @@ function switchLayer(mapId, key) {
   reg.map.removeLayer(reg.layers[reg.current]);
   reg.layers[key].addTo(reg.map);
   reg.current = key;
-
-  // Update button highlight
   document.querySelectorAll(`[data-mapid="${mapId}"] .layer-btn`).forEach(b => {
     b.classList.toggle('active', b.dataset.layer === key);
   });
 }
 
-/* ─── ANALYZE ─────────────────────────────────────────────────────────────── */
-document.getElementById('ticker-input')
-  .addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
+const SECTOR_ICONS = {
+  'Energy':'🛢️','Basic Materials':'⛏️','Industrials':'🏭',
+  'Consumer Cyclical':'🛍️','Consumer Defensive':'🛒','Healthcare':'🏥',
+  'Financial Services':'🏦','Technology':'💻','Communication Services':'📡',
+  'Utilities':'⚡','Real Estate':'🏢'
+};
 
-async function analyze() {
-  const ticker = document.getElementById('ticker-input').value.trim().toUpperCase();
-  if (!ticker) { shake(document.getElementById('ticker-input')); return; }
-
-  const btn     = document.getElementById('analyze-btn');
-  const loading = document.getElementById('loading');
-  const results = document.getElementById('results');
-  const errBox  = document.getElementById('error-box');
-
-  btn.disabled = true;
-  loading.style.display = 'block';
-  results.style.display = 'none';
-  errBox.style.display  = 'none';
-  Object.keys(maps).forEach(k => delete maps[k]);
-
-  try {
-    const res  = await fetch('/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker })
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
-    render(data);
-  } catch(err) {
-    errBox.textContent = '\u26a0  ' + err.message;
-    errBox.style.display = 'block';
-  } finally {
-    btn.disabled = false;
-    loading.style.display = 'none';
-  }
-}
-
-/* ─── RENDER ──────────────────────────────────────────────────────────────── */
-function render(d) {
-  const results = document.getElementById('results');
-
-  const statsHtml = [
-    d.market_cap !== 'N/A'
-      ? `<div class="stat"><div class="stat-val">${x(d.market_cap)}</div><div class="stat-label">Mkt Cap</div></div>` : '',
-    d.employees  !== 'N/A'
-      ? `<div class="stat"><div class="stat-val" style="font-size:.9rem">${x(d.employees)}</div><div class="stat-label">Employees</div></div>` : '',
-    d.sector     !== 'Unknown'
-      ? `<div class="stat"><div class="stat-val sm">${x(d.sector)}</div><div class="stat-label">Sector</div></div>` : '',
-  ].join('');
-
-  const locsHtml = d.locations.map((loc, i) => {
-    const mid = `map-${i}`;
-    return `
-      <div class="loc-card" data-mapid="${mid}">
-        <div class="loc-map-wrap">
-          <div id="${mid}" class="loc-map-leaf"></div>
-          <div class="map-hud"></div>
-          <div class="map-crosshair"></div>
-          <div class="map-scan"></div>
-          <div class="map-layer-btns">
-            <button class="layer-btn active" data-layer="esri"    onclick="switchLayer('${mid}','esri')">&#128752; ESRI SAT</button>
-            <button class="layer-btn"        data-layer="clarity" onclick="switchLayer('${mid}','clarity')">&#10024; CLARITY</button>
-            <button class="layer-btn"        data-layer="osm"     onclick="switchLayer('${mid}','osm')">&#128506; STREET</button>
-            <button class="layer-btn"        data-layer="toner"   onclick="switchLayer('${mid}','toner')">&#9632; B&amp;W</button>
-          </div>
-        </div>
-        <div class="loc-body">
-          <div class="loc-name">${x(loc.name)}</div>
-          <div class="loc-coords">LAT ${loc.lat.toFixed(4)} &nbsp;/&nbsp; LON ${loc.lon.toFixed(4)} &nbsp;·&nbsp; ZOOM 17</div>
-          <div class="source-row">
-            <span class="src-badge esri">ESRI WORLD IMAGERY</span>
-            <span class="src-badge sent">SENTINEL-2 10M</span>
-            <span class="src-badge osm">OSM REFERENCE</span>
-          </div>
-        </div>
-      </div>`;
-  }).join('');
-
-  results.innerHTML = `
-    <div class="company-card">
-      <div class="company-header">
-        <div>
-          <div class="ticker-badge">${x(d.ticker)}</div>
-          <div class="company-name">${x(d.company)}</div>
-          <div class="company-meta">${x(d.industry)} &nbsp;&middot;&nbsp; ${x(d.hq_location)}</div>
-        </div>
-        <div class="company-stats">${statsHtml}</div>
-      </div>
-      ${d.description ? `<div class="company-desc">${x(d.description)}</div>` : ''}
-    </div>
-
-    <div class="section-label">Satellite Monitoring Signals</div>
-    <div class="signals-grid">${d.signals.map(s=>`<div class="signal-chip">${x(s)}</div>`).join('')}</div>
-
-    <div class="section-label">Live Satellite Imagery &mdash; ${x(d.sector)} Targets</div>
-    <div class="locations-grid">${locsHtml}</div>
-  `;
-
-  results.style.display = 'block';
-  results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  // Boot all Leaflet maps after DOM is in the page
-  requestAnimationFrame(() => {
-    d.locations.forEach((loc, i) => initMap(`map-${i}`, loc.lat, loc.lon));
-  });
-}
-
-/* ─── BROWSE BY SECTOR ────────────────────────────────────────────────────── */
 async function browseSector(sectorName) {
-  // Highlight active pill
-  document.querySelectorAll('.sector-pill').forEach(p => {
-    p.classList.toggle('active', p.textContent.trim().toLowerCase().includes(sectorName.toLowerCase().split(' ')[0]));
+  document.querySelectorAll('.gics-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.sector === sectorName);
   });
 
   const loading = document.getElementById('loading');
   const results = document.getElementById('results');
-  const errBox  = document.getElementById('error-box');
 
   loading.style.display = 'block';
   results.style.display = 'none';
-  errBox.style.display  = 'none';
-  Object.keys(maps).forEach(k => delete maps[k]);
-
-  // Clear ticker input to avoid confusion
-  document.getElementById('ticker-input').value = '';
+  Object.keys(maps).forEach(k => { try { maps[k].map.remove(); } catch(e){} delete maps[k]; });
 
   try {
     const res  = await fetch('/sector', {
@@ -641,8 +500,8 @@ async function browseSector(sectorName) {
     if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
     renderSector(data);
   } catch(err) {
-    errBox.textContent = '\u26a0  ' + err.message;
-    errBox.style.display = 'block';
+    results.innerHTML = `<div style="text-align:center;padding:40px;font-family:'Share Tech Mono',monospace;color:var(--danger);font-size:0.8rem;">&#9888; ${x(err.message)}</div>`;
+    results.style.display = 'block';
   } finally {
     loading.style.display = 'none';
   }
@@ -650,6 +509,7 @@ async function browseSector(sectorName) {
 
 function renderSector(d) {
   const results = document.getElementById('results');
+  const icon = SECTOR_ICONS[d.sector] || '🛰️';
 
   const locsHtml = d.locations.map((loc, i) => {
     const mid = `map-${i}`;
@@ -669,31 +529,38 @@ function renderSector(d) {
         </div>
         <div class="loc-body">
           <div class="loc-name">${x(loc.name)}</div>
-          <div class="loc-coords">LAT ${loc.lat.toFixed(4)} &nbsp;/&nbsp; LON ${loc.lon.toFixed(4)} &nbsp;·&nbsp; ZOOM 17</div>
+          ${loc.tag ? `<div class="loc-tag">${x(loc.tag)}</div>` : ''}
+          <div class="loc-coords">LAT ${loc.lat.toFixed(4)} &nbsp;/&nbsp; LON ${loc.lon.toFixed(4)}</div>
           <div class="source-row">
-            <span class="src-badge esri">ESRI WORLD IMAGERY</span>
-            <span class="src-badge sent">SENTINEL-2 10M</span>
-            <span class="src-badge osm">OSM REFERENCE</span>
+            <span class="src-badge esri">ESRI WORLD</span>
+            <span class="src-badge sent">SENTINEL-2</span>
+            <span class="src-badge osm">OSM</span>
           </div>
         </div>
       </div>`;
   }).join('');
 
   results.innerHTML = `
-    <div class="company-card">
-      <div class="company-header">
+    <div class="sector-header-card">
+      <div class="sector-title-group">
+        <div class="sector-big-icon">${icon}</div>
         <div>
-          <div class="ticker-badge">GICS SECTOR</div>
-          <div class="company-name">${x(d.sector)}</div>
-          <div class="company-meta">GICS Classification &nbsp;&middot;&nbsp; ${d.locations.length} Satellite Targets</div>
+          <div class="sector-badge">GICS SECTOR</div>
+          <div class="sector-name-big">${x(d.sector)}</div>
+          <div class="sector-sub">Global Coverage &nbsp;&middot;&nbsp; ${d.locations.length} Satellite Targets Active</div>
         </div>
+      </div>
+      <div class="sector-stats">
+        <div class="stat"><div class="stat-val">${d.locations.length}</div><div class="stat-label">Targets</div></div>
+        <div class="stat"><div class="stat-val">${d.signals.length}</div><div class="stat-label">Signals</div></div>
+        <div class="stat"><div class="stat-val">LIVE</div><div class="stat-label">Feed</div></div>
       </div>
     </div>
 
     <div class="section-label">Satellite Monitoring Signals</div>
     <div class="signals-grid">${d.signals.map(s=>`<div class="signal-chip">${x(s)}</div>`).join('')}</div>
 
-    <div class="section-label">Live Satellite Imagery &mdash; ${x(d.sector)} Targets</div>
+    <div class="section-label">Live Satellite Imagery &mdash; ${x(d.sector)} (${d.locations.length} Targets)</div>
     <div class="locations-grid">${locsHtml}</div>
   `;
 
@@ -705,166 +572,236 @@ function renderSector(d) {
   });
 }
 
-/* ─── UTILS ───────────────────────────────────────────────────────────────── */
 function x(s) {
   if (typeof s !== 'string') return String(s ?? '');
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function shake(el) {
-  el.animate(
-    [{transform:'translateX(0)'},{transform:'translateX(-7px)'},{transform:'translateX(7px)'},{transform:'translateX(0)'}],
-    {duration:280, iterations:2}
-  );
 }
 </script>
 </body>
 </html>"""
 
 
-# ─── Sector → Satellite-monitorable location clusters ──────────────────────
+# ─── 12 LOCATIONS PER GICS SECTOR ─────────────────────────────────────────────
 SECTOR_LOCATIONS = {
-    "Consumer Defensive": [
-        {"name": "Walmart Supercenter (Bentonville, AR)", "lat": 36.3729,  "lon": -94.2088},
-        {"name": "Costco Warehouse (Issaquah, WA)",       "lat": 47.5301,  "lon": -122.0326},
-        {"name": "Target HQ (Minneapolis, MN)",           "lat": 44.9778,  "lon": -93.2650},
-        {"name": "Kroger (Cincinnati, OH)",                "lat": 39.1031,  "lon": -84.5120},
-    ],
-    "Consumer Cyclical": [
-        {"name": "Home Depot HQ (Atlanta, GA)",              "lat": 33.7490, "lon": -84.3880},
-        {"name": "AutoNation Dealership (Fort Lauderdale)",  "lat": 26.1224, "lon": -80.1373},
-        {"name": "AMC Theater (Leawood, KS)",                "lat": 38.9067, "lon": -94.6328},
-        {"name": "Lowe's Distribution (Mooresville, NC)",    "lat": 35.5845, "lon": -80.8098},
-    ],
-    "Industrials": [
-        {"name": "Amazon Fulfillment (Robbinsville, NJ)",  "lat": 40.2115, "lon": -74.5932},
-        {"name": "FedEx Hub (Memphis, TN)",                "lat": 35.0423, "lon": -89.9762},
-        {"name": "UPS Hub (Louisville, KY)",               "lat": 38.1781, "lon": -85.7360},
-        {"name": "Port of Los Angeles (San Pedro, CA)",    "lat": 33.7361, "lon": -118.2922},
-    ],
     "Energy": [
-        {"name": "Cushing Oil Storage (Cushing, OK)",      "lat": 35.9823, "lon": -96.7665},
-        {"name": "Houston Ship Channel (Houston, TX)",     "lat": 29.7372, "lon": -95.2707},
-        {"name": "Sabine Pass LNG Terminal (LA)",          "lat": 29.7286, "lon": -93.8700},
-        {"name": "Permian Basin Oil Fields (Midland, TX)", "lat": 31.9973, "lon": -102.0779},
+        {"name": "Cushing Oil Storage Hub (Cushing, OK)",          "tag": "CRUDE STORAGE",   "lat": 35.9823,  "lon": -96.7665},
+        {"name": "Houston Ship Channel (Houston, TX)",              "tag": "PETROCHEMICAL",   "lat": 29.7372,  "lon": -95.2707},
+        {"name": "Sabine Pass LNG Terminal (Cameron, LA)",          "tag": "LNG EXPORT",      "lat": 29.7286,  "lon": -93.8700},
+        {"name": "Permian Basin Oil Fields (Midland, TX)",          "tag": "OIL PRODUCTION",  "lat": 31.9973,  "lon": -102.0779},
+        {"name": "Port Arthur Refinery (Port Arthur, TX)",          "tag": "REFINING",        "lat": 29.8988,  "lon": -93.9321},
+        {"name": "Eagle Ford Shale Play (DeWitt County, TX)",       "tag": "SHALE PLAY",      "lat": 28.9500,  "lon": -97.8500},
+        {"name": "Bakken Oil Fields (Williston, ND)",               "tag": "SHALE PLAY",      "lat": 48.1470,  "lon": -103.6180},
+        {"name": "Freeport LNG Terminal (Freeport, TX)",            "tag": "LNG EXPORT",      "lat": 28.9400,  "lon": -95.3600},
+        {"name": "Canadian Oil Sands (Fort McMurray, AB)",          "tag": "OIL SANDS",       "lat": 56.7267,  "lon": -111.3790},
+        {"name": "Motiva Refinery (Port Arthur, TX)",               "tag": "REFINING",        "lat": 29.8760,  "lon": -93.8960},
+        {"name": "Ras Tanura Oil Terminal (Saudi Arabia)",          "tag": "CRUDE EXPORT",    "lat": 26.6447,  "lon": 50.1592},
+        {"name": "Rotterdam Oil Terminal (Netherlands)",            "tag": "IMPORT HUB",      "lat": 51.9179,  "lon": 4.0571},
     ],
     "Basic Materials": [
-        {"name": "BHP Copper Mine (Escondida, Chile)",     "lat": -24.2500, "lon": -69.0700},
-        {"name": "Nucor Steel Mill (Charlotte, NC)",       "lat": 35.2271,  "lon": -80.8431},
-        {"name": "Barrick Gold Mine (Elko, NV)",           "lat": 40.8324,  "lon": -115.7631},
-        {"name": "Albemarle Lithium (Kings Mountain, NC)", "lat": 35.2454,  "lon": -81.3412},
+        {"name": "BHP Escondida Copper Mine (Chile)",               "tag": "COPPER MINE",     "lat": -24.2500, "lon": -69.0700},
+        {"name": "Nucor Steel Mill (Charlotte, NC)",                "tag": "STEEL MILL",      "lat": 35.2271,  "lon": -80.8431},
+        {"name": "Barrick Goldstrike Mine (Elko, NV)",              "tag": "GOLD MINE",       "lat": 40.8324,  "lon": -115.7631},
+        {"name": "Albemarle Lithium (Kings Mountain, NC)",          "tag": "LITHIUM MINING",  "lat": 35.2454,  "lon": -81.3412},
+        {"name": "Rio Tinto Pilbara Iron Ore (W. Australia)",       "tag": "IRON ORE",        "lat": -22.7000, "lon": 117.7500},
+        {"name": "Freeport-McMoRan Grasberg Mine (Indonesia)",      "tag": "COPPER/GOLD",     "lat": -4.0570,  "lon": 137.1170},
+        {"name": "Potash Corp Mine (Esterhazy, SK, Canada)",        "tag": "POTASH MINE",     "lat": 50.6481,  "lon": -102.0818},
+        {"name": "U.S. Steel Gary Works (Gary, IN)",                "tag": "STEEL MILL",      "lat": 41.6031,  "lon": -87.3320},
+        {"name": "Codelco Chuquicamata Mine (Chile)",               "tag": "COPPER MINE",     "lat": -22.3160, "lon": -68.9170},
+        {"name": "Newmont Boddington Mine (W. Australia)",          "tag": "GOLD MINE",       "lat": -32.7833, "lon": 116.3833},
+        {"name": "Vale Carajás Iron Ore (Pará, Brazil)",            "tag": "IRON ORE",        "lat": -6.0667,  "lon": -50.1333},
+        {"name": "Mosaic Phosphate Plant (Riverview, FL)",          "tag": "PHOSPHATE",       "lat": 27.8417,  "lon": -82.3343},
     ],
-    "Technology": [
-        {"name": "Tesla Gigafactory Texas (Austin, TX)", "lat": 30.2240, "lon": -97.6180},
-        {"name": "Apple Park (Cupertino, CA)",           "lat": 37.3346, "lon": -122.0090},
-        {"name": "Amazon HQ (Seattle, WA)",              "lat": 47.6159, "lon": -122.3360},
-        {"name": "TSMC Fab (Hsinchu, Taiwan)",           "lat": 24.7814, "lon": 120.9969},
+    "Industrials": [
+        {"name": "Amazon Fulfillment Center (Robbinsville, NJ)",    "tag": "E-COMMERCE DC",  "lat": 40.2115,  "lon": -74.5932},
+        {"name": "FedEx World Hub (Memphis, TN)",                   "tag": "AIR CARGO HUB",  "lat": 35.0423,  "lon": -89.9762},
+        {"name": "UPS Worldport (Louisville, KY)",                  "tag": "AIR CARGO HUB",  "lat": 38.1781,  "lon": -85.7360},
+        {"name": "Port of Los Angeles (San Pedro, CA)",             "tag": "CONTAINER PORT",  "lat": 33.7361,  "lon": -118.2922},
+        {"name": "Port of Long Beach (Long Beach, CA)",             "tag": "CONTAINER PORT",  "lat": 33.7536,  "lon": -118.2160},
+        {"name": "Boeing Everett Factory (Everett, WA)",            "tag": "AIRCRAFT MFG",   "lat": 47.9209,  "lon": -122.2615},
+        {"name": "Caterpillar Plant (Peoria, IL)",                  "tag": "HEAVY MACHINERY","lat": 40.6936,  "lon": -89.5890},
+        {"name": "Port of Rotterdam (Netherlands)",                 "tag": "CONTAINER PORT",  "lat": 51.9179,  "lon": 4.4806},
+        {"name": "Norfolk Southern Intermodal (Atlanta, GA)",       "tag": "RAIL INTERMODAL", "lat": 33.7490,  "lon": -84.3880},
+        {"name": "Lockheed Skunk Works (Palmdale, CA)",             "tag": "AEROSPACE MFG",  "lat": 34.6291,  "lon": -118.0838},
+        {"name": "GE Aviation Plant (Cincinnati, OH)",              "tag": "ENGINE MFG",     "lat": 39.1031,  "lon": -84.5120},
+        {"name": "Port of Shanghai Yangshan (China)",               "tag": "CONTAINER PORT",  "lat": 30.6204,  "lon": 122.0525},
     ],
-    "Real Estate": [
-        {"name": "Simon Mall (Indianapolis, IN)",     "lat": 39.7684, "lon": -86.1581},
-        {"name": "Prologis Warehouse (Joliet, IL)",   "lat": 41.5250, "lon": -88.0817},
-        {"name": "Public Storage (Glendale, CA)",     "lat": 34.1425, "lon": -118.2551},
-        {"name": "CBRE Office Park (Dallas, TX)",     "lat": 32.7767, "lon": -96.7970},
+    "Consumer Cyclical": [
+        {"name": "Home Depot HQ (Atlanta, GA)",                     "tag": "HOME IMPROVEMENT","lat": 33.7490,  "lon": -84.3880},
+        {"name": "Amazon HQ2 (Arlington, VA)",                      "tag": "E-COMMERCE",      "lat": 38.8899,  "lon": -77.0847},
+        {"name": "AutoNation Dealership (Fort Lauderdale, FL)",      "tag": "AUTO DEALER",     "lat": 26.1224,  "lon": -80.1373},
+        {"name": "Lowe's Distribution (Mooresville, NC)",           "tag": "HOME IMPROVEMENT","lat": 35.5845,  "lon": -80.8098},
+        {"name": "Ford River Rouge Complex (Dearborn, MI)",         "tag": "AUTO ASSEMBLY",   "lat": 42.3016,  "lon": -83.1583},
+        {"name": "Tesla Gigafactory Texas (Austin, TX)",            "tag": "EV ASSEMBLY",     "lat": 30.2240,  "lon": -97.6180},
+        {"name": "Toyota Plant (Georgetown, KY)",                   "tag": "AUTO ASSEMBLY",   "lat": 38.2098,  "lon": -84.5555},
+        {"name": "MGM Grand (Las Vegas, NV)",                       "tag": "GAMING/LEISURE",  "lat": 36.1024,  "lon": -115.1701},
+        {"name": "Carnival Port of Miami (Miami, FL)",              "tag": "CRUISE TERMINAL", "lat": 25.7742,  "lon": -80.1700},
+        {"name": "Marriott HQ Campus (Bethesda, MD)",               "tag": "HOSPITALITY",     "lat": 38.9850,  "lon": -77.0947},
+        {"name": "IKEA Distribution (Perryville, MD)",              "tag": "RETAIL DIST.",    "lat": 39.5601,  "lon": -76.0722},
+        {"name": "Wynn Resorts (Las Vegas, NV)",                    "tag": "GAMING/LEISURE",  "lat": 36.1264,  "lon": -115.1661},
+    ],
+    "Consumer Defensive": [
+        {"name": "Walmart HQ (Bentonville, AR)",                    "tag": "RETAIL HQ",       "lat": 36.3729,  "lon": -94.2088},
+        {"name": "Costco Warehouse (Issaquah, WA)",                 "tag": "WAREHOUSE RETAIL","lat": 47.5301,  "lon": -122.0326},
+        {"name": "Procter & Gamble HQ (Cincinnati, OH)",            "tag": "CPG MFG",         "lat": 39.0968,  "lon": -84.5120},
+        {"name": "Kroger Distribution Center (Cincinnati, OH)",     "tag": "GROCERY DC",      "lat": 39.1031,  "lon": -84.5120},
+        {"name": "Tyson Foods Plant (Springdale, AR)",              "tag": "FOOD PROCESSING", "lat": 36.1867,  "lon": -94.1288},
+        {"name": "Anheuser-Busch Brewery (St. Louis, MO)",          "tag": "BEVERAGE MFG",    "lat": 38.5942,  "lon": -90.2107},
+        {"name": "Coca-Cola HQ (Atlanta, GA)",                      "tag": "BEVERAGE HQ",     "lat": 33.7937,  "lon": -84.3863},
+        {"name": "Archer Daniels Midland (Decatur, IL)",            "tag": "GRAIN PROCESSING","lat": 39.8428,  "lon": -88.9548},
+        {"name": "Cargill Grain Terminal (New Orleans, LA)",        "tag": "GRAIN EXPORT",    "lat": 29.9511,  "lon": -90.0715},
+        {"name": "PepsiCo HQ (Purchase, NY)",                       "tag": "BEVERAGE HQ",     "lat": 41.0534,  "lon": -73.7162},
+        {"name": "Altria Tobacco Plant (Richmond, VA)",             "tag": "TOBACCO MFG",     "lat": 37.5407,  "lon": -77.4360},
+        {"name": "General Mills Plant (Minneapolis, MN)",           "tag": "FOOD MFG",        "lat": 44.9778,  "lon": -93.2650},
     ],
     "Healthcare": [
-        {"name": "J&J Campus (New Brunswick, NJ)", "lat": 40.4870, "lon": -74.4457},
-        {"name": "Mayo Clinic (Rochester, MN)",    "lat": 44.0224, "lon": -92.4663},
-        {"name": "Cardinal Health DC (Dublin, OH)","lat": 40.0992, "lon": -83.1141},
-        {"name": "McKesson HQ (Las Colinas, TX)",  "lat": 32.8709, "lon": -97.0570},
+        {"name": "Johnson & Johnson Campus (New Brunswick, NJ)",    "tag": "PHARMA HQ",       "lat": 40.4870,  "lon": -74.4457},
+        {"name": "Mayo Clinic (Rochester, MN)",                     "tag": "MEDICAL CENTER",  "lat": 44.0224,  "lon": -92.4663},
+        {"name": "Cardinal Health DC (Dublin, OH)",                 "tag": "PHARMA DISTRIB.", "lat": 40.0992,  "lon": -83.1141},
+        {"name": "McKesson HQ (Las Colinas, TX)",                   "tag": "PHARMA DISTRIB.", "lat": 32.8709,  "lon": -97.0570},
+        {"name": "Pfizer Research Campus (Groton, CT)",             "tag": "DRUG RESEARCH",   "lat": 41.3554,  "lon": -72.0754},
+        {"name": "Merck Plant (Rahway, NJ)",                        "tag": "PHARMA MFG",      "lat": 40.6082,  "lon": -74.2774},
+        {"name": "Cleveland Clinic (Cleveland, OH)",                "tag": "MEDICAL CENTER",  "lat": 41.5021,  "lon": -81.6209},
+        {"name": "Abbott Labs (Abbott Park, IL)",                   "tag": "MEDTECH MFG",     "lat": 42.2842,  "lon": -87.9300},
+        {"name": "Boston Scientific (Marlborough, MA)",             "tag": "MEDTECH MFG",     "lat": 42.3487,  "lon": -71.5298},
+        {"name": "AstraZeneca Campus (Gaithersburg, MD)",           "tag": "BIOPHARMA",       "lat": 39.1318,  "lon": -77.2219},
+        {"name": "Eli Lilly Plant (Indianapolis, IN)",              "tag": "PHARMA MFG",      "lat": 39.7908,  "lon": -86.1467},
+        {"name": "Johns Hopkins Medical (Baltimore, MD)",           "tag": "MEDICAL CENTER",  "lat": 39.2974,  "lon": -76.5928},
     ],
     "Financial Services": [
-        {"name": "NYSE (New York, NY)",              "lat": 40.7069, "lon": -74.0089},
-        {"name": "Goldman Sachs HQ (New York, NY)", "lat": 40.7143, "lon": -74.0138},
-        {"name": "Berkshire HQ (Omaha, NE)",         "lat": 41.2565, "lon": -95.9345},
-        {"name": "JPMorgan HQ (New York, NY)",       "lat": 40.7525, "lon": -73.9773},
+        {"name": "NYSE — Wall Street (New York, NY)",               "tag": "STOCK EXCHANGE",  "lat": 40.7069,  "lon": -74.0089},
+        {"name": "Goldman Sachs HQ (New York, NY)",                 "tag": "INVESTMENT BANK", "lat": 40.7143,  "lon": -74.0138},
+        {"name": "Berkshire Hathaway HQ (Omaha, NE)",              "tag": "CONGLOMERATE",    "lat": 41.2565,  "lon": -95.9345},
+        {"name": "JPMorgan Chase HQ (New York, NY)",                "tag": "MEGABANK",        "lat": 40.7525,  "lon": -73.9773},
+        {"name": "Bank of America HQ (Charlotte, NC)",              "tag": "MEGABANK",        "lat": 35.2271,  "lon": -80.8431},
+        {"name": "Citadel HQ (Chicago, IL)",                        "tag": "HEDGE FUND",      "lat": 41.8827,  "lon": -87.6261},
+        {"name": "Visa HQ (Foster City, CA)",                       "tag": "PAYMENTS",        "lat": 37.5541,  "lon": -122.2760},
+        {"name": "CME Group (Chicago, IL)",                         "tag": "FUTURES EXCHANGE","lat": 41.8827,  "lon": -87.6344},
+        {"name": "Fidelity Investments (Boston, MA)",               "tag": "ASSET MGMT",      "lat": 42.3584,  "lon": -71.0598},
+        {"name": "Wells Fargo HQ (San Francisco, CA)",              "tag": "MEGABANK",        "lat": 37.7929,  "lon": -122.3969},
+        {"name": "Blackstone HQ (New York, NY)",                    "tag": "PRIVATE EQUITY",  "lat": 40.7614,  "lon": -73.9776},
+        {"name": "London Stock Exchange (London, UK)",              "tag": "STOCK EXCHANGE",  "lat": 51.5156,  "lon": -0.0977},
+    ],
+    "Technology": [
+        {"name": "Apple Park (Cupertino, CA)",                      "tag": "TECH HQ",         "lat": 37.3346,  "lon": -122.0090},
+        {"name": "Googleplex (Mountain View, CA)",                  "tag": "TECH HQ",         "lat": 37.4220,  "lon": -122.0841},
+        {"name": "Microsoft Campus (Redmond, WA)",                  "tag": "TECH HQ",         "lat": 47.6423,  "lon": -122.1391},
+        {"name": "TSMC Fab 18 (Tainan, Taiwan)",                    "tag": "CHIP FAB",        "lat": 22.9908,  "lon": 120.2133},
+        {"name": "NVIDIA HQ (Santa Clara, CA)",                     "tag": "GPU DESIGN",      "lat": 37.3688,  "lon": -121.9689},
+        {"name": "Intel Fab (Chandler, AZ)",                        "tag": "CHIP FAB",        "lat": 33.3062,  "lon": -111.8413},
+        {"name": "Samsung Austin Fab (Austin, TX)",                 "tag": "CHIP FAB",        "lat": 30.4515,  "lon": -97.6120},
+        {"name": "Amazon AWS Data Center (Ashburn, VA)",            "tag": "CLOUD DC",        "lat": 39.0437,  "lon": -77.4875},
+        {"name": "Meta Data Center (Prineville, OR)",               "tag": "CLOUD DC",        "lat": 44.3049,  "lon": -120.8340},
+        {"name": "Tesla Gigafactory Nevada (Sparks, NV)",           "tag": "BATTERY MFG",     "lat": 39.5374,  "lon": -119.4408},
+        {"name": "ASML HQ (Veldhoven, Netherlands)",                "tag": "CHIP EQUIPMENT",  "lat": 51.4003,  "lon": 5.4190},
+        {"name": "Foxconn Zhengzhou (China)",                       "tag": "CONTRACT MFG",    "lat": 34.7460,  "lon": 113.6253},
     ],
     "Communication Services": [
-        {"name": "Google Campus (Mountain View, CA)", "lat": 37.4220, "lon": -122.0841},
-        {"name": "Meta HQ (Menlo Park, CA)",          "lat": 37.4845, "lon": -122.1477},
-        {"name": "AT&T HQ (Dallas, TX)",              "lat": 32.7813, "lon": -96.7974},
-        {"name": "Netflix HQ (Los Gatos, CA)",        "lat": 37.2358, "lon": -121.9624},
+        {"name": "Googleplex (Mountain View, CA)",                  "tag": "SEARCH/AD",       "lat": 37.4220,  "lon": -122.0841},
+        {"name": "Meta HQ (Menlo Park, CA)",                        "tag": "SOCIAL MEDIA",    "lat": 37.4845,  "lon": -122.1477},
+        {"name": "AT&T HQ (Dallas, TX)",                            "tag": "TELECOM",         "lat": 32.7813,  "lon": -96.7974},
+        {"name": "Netflix HQ (Los Gatos, CA)",                      "tag": "STREAMING",       "lat": 37.2358,  "lon": -121.9624},
+        {"name": "Comcast HQ (Philadelphia, PA)",                   "tag": "CABLE/MEDIA",     "lat": 39.9526,  "lon": -75.1652},
+        {"name": "Disney Studios (Burbank, CA)",                    "tag": "MEDIA/CONTENT",   "lat": 34.1575,  "lon": -118.3267},
+        {"name": "Verizon HQ (Basking Ridge, NJ)",                  "tag": "TELECOM",         "lat": 40.6862,  "lon": -74.5311},
+        {"name": "T-Mobile HQ (Bellevue, WA)",                      "tag": "TELECOM",         "lat": 47.6152,  "lon": -122.1944},
+        {"name": "Intelsat Satellite Farm (Lyles, TN)",             "tag": "SATELLITE COMM",  "lat": 35.6951,  "lon": -87.4294},
+        {"name": "Warner Bros. Studios (Burbank, CA)",              "tag": "MEDIA/CONTENT",   "lat": 34.1548,  "lon": -118.3373},
+        {"name": "SpaceX Starlink (Boca Chica, TX)",                "tag": "SATELLITE COMM",  "lat": 25.9971,  "lon": -97.1553},
+        {"name": "YouTube Data Center (The Dalles, OR)",            "tag": "CLOUD DC",        "lat": 45.5940,  "lon": -121.1790},
     ],
     "Utilities": [
-        {"name": "Hoover Dam (Boulder City, NV)",      "lat": 36.0161, "lon": -114.7377},
-        {"name": "Duke Energy Plant (Charlotte, NC)",  "lat": 35.2271, "lon": -80.8431},
-        {"name": "NextEra Solar Farm (Blythe, CA)",    "lat": 33.6173, "lon": -114.5965},
-        {"name": "Constellation Nuclear (Perry, OH)",  "lat": 41.8000, "lon": -81.1434},
+        {"name": "Hoover Dam (Boulder City, NV)",                   "tag": "HYDRO POWER",     "lat": 36.0161,  "lon": -114.7377},
+        {"name": "Duke Energy McGuire Nuclear (Cornelius, NC)",     "tag": "NUCLEAR POWER",   "lat": 35.4327,  "lon": -80.9479},
+        {"name": "NextEra Solar Farm (Blythe, CA)",                 "tag": "SOLAR FARM",      "lat": 33.6173,  "lon": -114.5965},
+        {"name": "Constellation Nuclear (Perry, OH)",               "tag": "NUCLEAR POWER",   "lat": 41.8000,  "lon": -81.1434},
+        {"name": "Topaz Solar Farm (San Luis Obispo, CA)",          "tag": "SOLAR FARM",      "lat": 35.3600,  "lon": -120.0700},
+        {"name": "Alta Wind Energy Center (Tehachapi, CA)",         "tag": "WIND FARM",       "lat": 34.9500,  "lon": -118.5500},
+        {"name": "Robert Moses Niagara Plant (Lewiston, NY)",       "tag": "HYDRO POWER",     "lat": 43.1723,  "lon": -79.0490},
+        {"name": "Glen Canyon Dam (Page, AZ)",                      "tag": "HYDRO POWER",     "lat": 36.9388,  "lon": -111.4838},
+        {"name": "Hornsdale Wind Farm (S. Australia)",              "tag": "WIND + BATTERY",  "lat": -33.0670, "lon": 138.0010},
+        {"name": "Palo Verde Nuclear Plant (Tonopah, AZ)",          "tag": "NUCLEAR POWER",   "lat": 33.3889,  "lon": -112.8625},
+        {"name": "Walney Offshore Wind (Irish Sea, UK)",            "tag": "OFFSHORE WIND",   "lat": 54.0500,  "lon": -3.5667},
+        {"name": "Gemasolar Thermosolar Plant (Seville, Spain)",    "tag": "SOLAR THERMAL",   "lat": 37.5600,  "lon": -5.3300},
+    ],
+    "Real Estate": [
+        {"name": "Mall of America — Simon (Bloomington, MN)",       "tag": "RETAIL REIT",     "lat": 44.8549,  "lon": -93.2422},
+        {"name": "Prologis Warehouse (Joliet, IL)",                 "tag": "INDUSTRIAL REIT", "lat": 41.5250,  "lon": -88.0817},
+        {"name": "Public Storage (Glendale, CA)",                   "tag": "STORAGE REIT",    "lat": 34.1425,  "lon": -118.2551},
+        {"name": "Equinix Data Center (Ashburn, VA)",               "tag": "DATA CENTER REIT","lat": 39.0437,  "lon": -77.4875},
+        {"name": "Welltower Senior Care (Toledo, OH)",              "tag": "HEALTHCARE REIT", "lat": 41.6529,  "lon": -83.5379},
+        {"name": "American Tower HQ (Boston, MA)",                  "tag": "CELL TOWER REIT", "lat": 42.3601,  "lon": -71.0589},
+        {"name": "SBA Communications (Boca Raton, FL)",            "tag": "CELL TOWER REIT", "lat": 26.3683,  "lon": -80.1289},
+        {"name": "Realty Income (San Diego, CA)",                   "tag": "RETAIL REIT",     "lat": 32.7157,  "lon": -117.1611},
+        {"name": "Boston Properties Prudential (Boston, MA)",       "tag": "OFFICE REIT",     "lat": 42.3471,  "lon": -71.0824},
+        {"name": "Crown Castle Tower (Houston, TX)",                "tag": "CELL TOWER REIT", "lat": 29.7604,  "lon": -95.3698},
+        {"name": "Ventas Senior Housing (Chicago, IL)",             "tag": "HEALTHCARE REIT", "lat": 41.8827,  "lon": -87.6233},
+        {"name": "Iron Mountain Data Center (Manassas, VA)",        "tag": "DATA CENTER REIT","lat": 38.7509,  "lon": -77.4752},
     ],
 }
 
-DEFAULT_LOCATIONS = [
-    {"name": "Port of LA/Long Beach (CA)", "lat": 33.7361, "lon": -118.2922},
-    {"name": "Newark Airport Cargo (NJ)",  "lat": 40.6895, "lon": -74.1745},
-    {"name": "Chicago O'Hare Cargo (IL)",  "lat": 41.9742, "lon": -87.9073},
-    {"name": "Dallas/Fort Worth Hub (TX)", "lat": 32.8998, "lon": -97.0403},
-]
-
 SECTOR_SIGNALS = {
-    "Consumer Defensive":     ["🅿️ Parking lot occupancy", "🚗 Vehicle count trends", "📦 Loading dock activity"],
-    "Consumer Cyclical":      ["🅿️ Parking lot footfall", "🏗️ Construction progress", "🚗 Dealership lot inventory"],
-    "Industrials":            ["📦 Container yard density", "🚢 Ship traffic at ports", "🏭 Factory roof heat signature"],
-    "Energy":                 ["🛢️ Oil tank shadow volume", "🚢 Tanker traffic", "🔥 Flare activity"],
-    "Basic Materials":        ["⛏️ Mine excavation progress", "🏭 Plant steam & smoke", "📦 Stockpile size"],
-    "Technology":             ["🏭 Gigafactory expansion", "🅿️ Campus employee count", "🏗️ Data center construction"],
-    "Real Estate":            ["🅿️ Mall parking occupancy", "🏗️ Development progress", "🚗 Residential traffic"],
-    "Healthcare":             ["🏥 Facility expansion", "🅿️ Hospital lot occupancy", "🏗️ Campus construction"],
-    "Financial Services":     ["🏢 Office occupancy patterns", "🏗️ HQ construction", "🚗 Commuter traffic"],
-    "Communication Services": ["🏗️ Data center expansion", "📡 Antenna arrays", "🅿️ Campus footfall"],
-    "Utilities":              ["☀️ Solar farm output area", "💧 Reservoir water level", "🌬️ Wind turbine arrays"],
+    "Energy": [
+        "🛢️ Oil tank shadow volume analysis", "🚢 Tanker traffic & fleet positioning",
+        "🔥 Flare intensity & burn-off detection", "🏗️ Rig count & drilling activity",
+        "🌡️ Pipeline thermal signatures", "📦 Refinery throughput estimation",
+    ],
+    "Basic Materials": [
+        "⛏️ Mine pit excavation progress", "🏭 Plant steam & smoke plume analysis",
+        "📦 Stockpile volume estimation", "🚛 Haul truck count & activity",
+        "🌿 Tailings pond level monitoring", "🏗️ Processing facility expansion",
+    ],
+    "Industrials": [
+        "📦 Container yard density & flow", "🚢 Ship traffic & berth occupancy",
+        "🏭 Factory roof heat signature", "✈️ Air cargo apron utilization",
+        "🚛 Truck dwell time at docks", "🏗️ Facility construction progress",
+    ],
+    "Consumer Cyclical": [
+        "🅿️ Parking lot footfall & occupancy", "🏗️ Construction & expansion progress",
+        "🚗 Dealership lot inventory count", "🛳️ Cruise ship berthing activity",
+        "🏨 Hotel parking & occupancy proxy", "🏬 Retail strip foot traffic",
+    ],
+    "Consumer Defensive": [
+        "🅿️ Store parking lot occupancy", "🚗 Vehicle count & dwell trends",
+        "📦 Loading dock & trailer activity", "🌾 Grain silo & storage levels",
+        "🏭 Food processing plant activity", "🚛 Distribution center truck flow",
+    ],
+    "Healthcare": [
+        "🏥 Hospital parking & facility occupancy", "🏗️ Campus construction & expansion",
+        "🚑 Emergency bay utilization", "📦 Pharma distribution center activity",
+        "🧪 Research facility thermal signatures", "🚛 Medical supply chain flow",
+    ],
+    "Financial Services": [
+        "🏢 Office tower occupancy patterns", "🚗 Commuter traffic & parking",
+        "🏗️ HQ campus construction progress", "🌆 Central district footfall",
+        "📡 Data center antenna arrays", "🔒 Secure facility perimeter monitoring",
+    ],
+    "Technology": [
+        "🏭 Gigafactory expansion tracking", "🅿️ Campus employee count proxy",
+        "🏗️ Data center construction progress", "💨 Cooling tower plume & heat output",
+        "🚛 Chip equipment delivery tracking", "🔧 Fab cleanroom roof activity",
+    ],
+    "Communication Services": [
+        "📡 Antenna array density mapping", "🏗️ Data center expansion progress",
+        "🅿️ Campus footfall & occupancy", "🛰️ Uplink dish orientation tracking",
+        "🚀 Satellite launch facility activity", "🏢 Studio lot utilization",
+    ],
+    "Utilities": [
+        "☀️ Solar panel array output area", "💧 Reservoir & dam water level",
+        "🌬️ Wind turbine blade activity", "☢️ Nuclear cooling tower plume",
+        "⚡ Transmission line corridor monitoring", "🔥 Power plant stack emissions",
+    ],
+    "Real Estate": [
+        "🅿️ Mall & retail parking occupancy", "🏗️ Development site progress",
+        "🚗 Residential traffic & occupancy", "📡 Cell tower & antenna count",
+        "🏥 Senior housing facility monitoring", "🏢 Office campus occupancy proxy",
+    ],
 }
 
 
-# ── ROUTES ────────────────────────────────────────────────────────────────────
+# ── ROUTES ─────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return HTML
-
-
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    body = request.get_json(silent=True) or {}
-    ticker_symbol = body.get("ticker", "").strip().upper()
-
-    if not ticker_symbol:
-        return jsonify({"error": "Ticker symbol is required."}), 400
-
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        info   = ticker.info or {}
-    except Exception as e:
-        return jsonify({"error": f"Could not fetch ticker data: {e}"}), 500
-
-    company_name = info.get("longName") or info.get("shortName") or ""
-    if not company_name and not info.get("sector"):
-        return jsonify({"error": f"No data found for '{ticker_symbol}'. Check the symbol."}), 404
-
-    company_name = company_name or ticker_symbol
-    sector       = info.get("sector")   or "Unknown"
-    industry     = info.get("industry") or "Unknown"
-    hq_location  = ", ".join(filter(None, [
-        info.get("city") or "", info.get("state") or "", info.get("country") or ""
-    ]))
-    employees    = info.get("fullTimeEmployees") or 0
-    market_cap   = info.get("marketCap") or 0
-    desc_raw     = info.get("longBusinessSummary") or ""
-    description  = (desc_raw[:300] + "…") if len(desc_raw) > 300 else desc_raw
-
-    targets   = SECTOR_LOCATIONS.get(sector, DEFAULT_LOCATIONS)
-    signals   = SECTOR_SIGNALS.get(
-        sector, ["🛰️ General area activity", "🅿️ Parking patterns", "🚗 Traffic flow"]
-    )
-
-    return jsonify({
-        "ticker":      ticker_symbol,
-        "company":     company_name,
-        "sector":      sector,
-        "industry":    industry,
-        "hq_location": hq_location,
-        "employees":   f"{employees:,}" if employees else "N/A",
-        "market_cap":  f"${market_cap / 1e9:.1f}B" if market_cap else "N/A",
-        "description": description,
-        "signals":     signals,
-        "locations":   targets,
-    })
 
 
 @app.route("/sector", methods=["POST"])
@@ -875,18 +812,13 @@ def sector_browse():
     if not sector_name:
         return jsonify({"error": "Sector name is required."}), 400
 
-    targets = SECTOR_LOCATIONS.get(sector_name, DEFAULT_LOCATIONS)
-    signals = SECTOR_SIGNALS.get(
-        sector_name, ["🛰️ General area activity", "🅿️ Parking patterns", "🚗 Traffic flow"]
-    )
-
     if sector_name not in SECTOR_LOCATIONS:
         return jsonify({"error": f"Unknown sector: '{sector_name}'."}), 404
 
     return jsonify({
         "sector":    sector_name,
-        "signals":   signals,
-        "locations": targets,
+        "signals":   SECTOR_SIGNALS.get(sector_name, []),
+        "locations": SECTOR_LOCATIONS[sector_name],
     })
 
 
