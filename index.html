@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Satellite Intelligence — Stock Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #09090b;
+    --surface: #111113;
+    --border: #222226;
+    --accent: #00ff88;
+    --accent2: #00ccff;
+    --text: #e8e8ea;
+    --muted: #666672;
+    --warning: #ffcc00;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+
+  .logo-dot {
+    width: 10px; height: 10px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(0,255,136,0); }
+  }
+
+  header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  header span {
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-left: auto;
+  }
+
+  /* Search bar */
+  .search-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 32px;
+    margin-bottom: 32px;
+  }
+
+  .search-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .search-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  .ticker-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 14px 20px;
+    border-radius: 2px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .ticker-input::placeholder { color: var(--border); }
+  .ticker-input:focus { border-color: var(--accent); }
+
+  .analyze-btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 0.85rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 14px 32px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+
+  .analyze-btn:hover { opacity: 0.85; }
+  .analyze-btn:active { transform: scale(0.98); }
+  .analyze-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .examples {
+    margin-top: 12px;
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  .examples span {
+    color: var(--accent2);
+    cursor: pointer;
+    margin: 0 6px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  /* Loading */
+  #loading {
+    display: none;
+    text-align: center;
+    padding: 60px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    animation: blink 1s infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Error */
+  #error {
+    display: none;
+    background: #1a0a0a;
+    border: 1px solid #ff4444;
+    color: #ff6666;
+    padding: 16px 20px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    margin-bottom: 24px;
+  }
+
+  /* Results */
+  #results { display: none; }
+
+  /* Company card */
+  .company-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+  }
+
+  .company-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: #fff;
+    grid-column: 1 / -1;
+    margin-bottom: 8px;
+  }
+
+  .ticker-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #000;
+    font-weight: 700;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    padding: 3px 10px;
+    border-radius: 2px;
+    margin-left: 10px;
+    vertical-align: middle;
+  }
+
+  .meta-item label {
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .meta-item span {
+    font-size: 0.85rem;
+    color: var(--text);
+  }
+
+  .meta-item span.accent { color: var(--accent2); }
+
+  /* Description */
+  .description {
+    grid-column: 1 / -1;
+    font-size: 0.75rem;
+    color: var(--muted);
+    line-height: 1.7;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    margin-top: 4px;
+  }
+
+  /* Signals */
+  .signals-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 20px 28px;
+    margin-bottom: 24px;
+  }
+
+  .section-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .signals-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .signal-chip {
+    background: #0a1a0f;
+    border: 1px solid #1a3a25;
+    color: var(--accent);
+    font-size: 0.72rem;
+    padding: 6px 14px;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+  }
+
+  /* Locations grid */
+  .locations-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .location-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .location-card:hover { border-color: var(--accent2); }
+
+  .location-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .location-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+
+  .coords {
+    font-size: 0.62rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  /* Map iframe */
+  .map-frame {
+    width: 100%;
+    height: 200px;
+    border: none;
+    display: block;
+    background: #111;
+  }
+
+  .location-links {
+    padding: 12px 18px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: var(--bg);
+  }
+
+  .sat-link {
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    border-radius: 2px;
+    text-decoration: none;
+    font-weight: 700;
+    transition: opacity 0.15s;
+  }
+
+  .sat-link:hover { opacity: 0.8; }
+
+  .link-sentinel {
+    background: #0a2a1a;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+
+  .link-usgs {
+    background: #0a1a2a;
+    border: 1px solid var(--accent2);
+    color: var(--accent2);
+  }
+
+  .link-gmaps {
+    background: #1a1a0a;
+    border: 1px solid var(--warning);
+    color: var(--warning);
+  }
+
+  /* Footer note */
+  .footer-note {
+    margin-top: 32px;
+    font-size: 0.62rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+    line-height: 1.8;
+  }
+
+  @media (max-width: 700px) {
+    .company-card { grid-template-columns: 1fr; }
+    .locations-grid { grid-template-columns: 1fr; }
+    .search-row { flex-direction: column; }
+    .ticker-input { font-size: 1.1rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="logo-dot"></div>
+    <h1>🛰 Satellite Intel</h1>
+    <span>Stock Physical Footprint Analysis</span>
+  </header>
+
+  <!-- Search -->
+  <div class="search-section">
+    <label class="search-label">Enter Ticker Symbol</label>
+    <div class="search-row">
+      <input
+        class="ticker-input"
+        id="tickerInput"
+        type="text"
+        placeholder="WMT"
+        maxlength="10"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button class="analyze-btn" id="analyzeBtn" onclick="analyze()">▶ Analyze</button>
+    </div>
+    <div class="examples">
+      Try:
+      <span onclick="loadExample('WMT')">WMT</span>
+      <span onclick="loadExample('COST')">COST</span>
+      <span onclick="loadExample('TSLA')">TSLA</span>
+      <span onclick="loadExample('XOM')">XOM</span>
+      <span onclick="loadExample('AMZN')">AMZN</span>
+      <span onclick="loadExample('HD')">HD</span>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading">⟳ FETCHING SATELLITE TARGETS...</div>
+
+  <!-- Error -->
+  <div id="error"></div>
+
+  <!-- Results -->
+  <div id="results">
+
+    <!-- Company info -->
+    <div class="company-card" id="companyCard"></div>
+
+    <!-- Satellite signals -->
+    <div class="signals-section">
+      <div class="section-label">📡 Satellite Signal Types — What to monitor for this sector</div>
+      <div class="signals-grid" id="signalsGrid"></div>
+    </div>
+
+    <!-- Location cards -->
+    <div class="section-label" style="margin-bottom:14px;">
+      🗺️ Sector-Relevant Satellite Monitoring Targets
+    </div>
+    <div class="locations-grid" id="locationsGrid"></div>
+
+    <div class="footer-note">
+      ⚠️ Satellite links open Sentinel-2 (ESA, free, 10m resolution) and Landsat 8/9 (USGS, free, 30m resolution) archives.
+      No registration required for EO Browser. Landsat via earthexplorer.usgs.gov.
+      Locations shown are sector-representative targets, not individual company stores.
+      Always cross-reference with SEC filings and fundamentals.
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const tickerInput = document.getElementById('tickerInput');
+
+  tickerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') analyze();
+  });
+
+  function loadExample(ticker) {
+    tickerInput.value = ticker;
+    analyze();
+  }
+
+  async function analyze() {
+    const ticker = tickerInput.value.trim().toUpperCase();
+    if (!ticker) return;
+
+    // Reset UI
+    document.getElementById('error').style.display = 'none';
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('analyzeBtn').disabled = true;
+
+    try {
+      const res = await fetch('/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        showError(data.error || 'Unknown error');
+        return;
+      }
+
+      renderResults(data);
+
+    } catch (err) {
+      showError('Network error: ' + err.message);
+    } finally {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('analyzeBtn').disabled = false;
+    }
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error');
+    el.textContent = '⚠ ' + msg;
+    el.style.display = 'block';
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('analyzeBtn').disabled = false;
+  }
+
+  function fmt(val) { return val || 'N/A'; }
+
+  function renderResults(d) {
+    // Company card
+    document.getElementById('companyCard').innerHTML = `
+      <div class="company-name">
+        ${d.company}
+        <span class="ticker-badge">${d.ticker}</span>
+      </div>
+      <div class="meta-item">
+        <label>Sector</label>
+        <span class="accent">${fmt(d.sector)}</span>
+      </div>
+      <div class="meta-item">
+        <label>Industry</label>
+        <span>${fmt(d.industry)}</span>
+      </div>
+      <div class="meta-item">
+        <label>HQ Location</label>
+        <span>${fmt(d.hq_location)}</span>
+      </div>
+      <div class="meta-item">
+        <label>Employees</label>
+        <span>${fmt(d.employees)}</span>
+      </div>
+      <div class="meta-item">
+        <label>Market Cap</label>
+        <span class="accent">${fmt(d.market_cap)}</span>
+      </div>
+      <div class="meta-item">
+        <label>Website</label>
+        <span>${d.website ? `<a href="${d.website}" target="_blank" style="color:var(--accent2);text-decoration:none;">${d.website}</a>` : 'N/A'}</span>
+      </div>
+      ${d.description ? `<div class="description">${d.description}</div>` : ''}
+    `;
+
+    // Signals
+    document.getElementById('signalsGrid').innerHTML = d.signals
+      .map(s => `<div class="signal-chip">${s}</div>`)
+      .join('');
+
+    // Location cards (no embed — just links to avoid API key requirement)
+    document.getElementById('locationsGrid').innerHTML = d.locations.map(loc => `
+      <div class="location-card">
+        <div class="location-header">
+          <div class="location-name">${loc.name}</div>
+          <div class="coords">📍 ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}</div>
+        </div>
+        <div class="location-links">
+          <a class="sat-link link-sentinel" href="${loc.sentinel_link}" target="_blank">
+            🛰 Sentinel-2 (10m)
+          </a>
+          <a class="sat-link link-usgs" href="${loc.usgs_link}" target="_blank">
+            🌍 Landsat (30m)
+          </a>
+          <a class="sat-link link-gmaps" href="${loc.google_maps_link}" target="_blank">
+            🗺 Satellite View
+          </a>
+        </div>
+      </div>
+    `).join('');
+
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+  }
+</script>
+</body>
+</html>
