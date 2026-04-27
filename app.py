@@ -1085,14 +1085,103 @@ def wms_url():
     )
 
 
+# ── Evalscripts for each layer (Sentinel Hub Process API) ─────────────────────
+# These are JavaScript snippets executed server-side by Sentinel Hub to render
+# each band combination. No instance UUID needed — Bearer token is sufficient.
+EVALSCRIPTS = {
+    "TRUE-COLOR": """
+//VERSION=3
+function setup(){return{input:["B04","B03","B02","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  return[3.5*s.B04,3.5*s.B03,3.5*s.B02,s.dataMask];
+}""",
+    "FALSE-COLOR": """
+//VERSION=3
+function setup(){return{input:["B08","B04","B03","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  return[2.5*s.B08,2.5*s.B04,2.5*s.B03,s.dataMask];
+}""",
+    "NDVI": """
+//VERSION=3
+function setup(){return{input:["B08","B04","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  var ndvi=(s.B08-s.B04)/(s.B08+s.B04);
+  var r,g,b;
+  if(ndvi<-0.2){r=0.75;g=0.75;b=0.75;}
+  else if(ndvi<0){r=0.86;g=0.86;b=0.86;}
+  else if(ndvi<0.1){r=1;g=0.98;b=0.8;}
+  else if(ndvi<0.2){r=0.78;g=0.88;b=0.52;}
+  else if(ndvi<0.3){r=0.36;g=0.73;b=0.36;}
+  else if(ndvi<0.4){r=0.13;g=0.55;b=0.13;}
+  else{r=0;g=0.39;b=0;}
+  return[r,g,b,s.dataMask];
+}""",
+    "MOISTURE-INDEX": """
+//VERSION=3
+function setup(){return{input:["B8A","B11","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  var mi=(s.B8A-s.B11)/(s.B8A+s.B11);
+  var r,g,b;
+  if(mi<-0.8){r=0.5;g=0;b=0;}
+  else if(mi<-0.4){r=1;g=0;b=0;}
+  else if(mi<0){r=1;g=0.6;b=0;}
+  else if(mi<0.2){r=1;g=1;b=0.6;}
+  else if(mi<0.4){r=0.6;g=0.8;b=1;}
+  else{r=0;g=0.4;b=1;}
+  return[r,g,b,s.dataMask];
+}""",
+    "SWIR": """
+//VERSION=3
+function setup(){return{input:["B12","B8A","B04","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  return[2.5*s.B12,2.5*s.B8A,2.5*s.B04,s.dataMask];
+}""",
+    "GEOLOGY": """
+//VERSION=3
+function setup(){return{input:["B12","B11","B02","dataMask"],output:{bands:4}}}
+function evaluatePixel(s){
+  return[2.5*s.B12,2.5*s.B11,2.5*s.B02,s.dataMask];
+}""",
+}
+
+# ── Tile helpers ───────────────────────────────────────────────────────────────
+def xyz_to_wgs84_bbox(z, x, y):
+    """Return (min_lon, min_lat, max_lon, max_lat) for an XYZ tile."""
+    z, x, y = int(z), int(x), int(y)
+    n = 2 ** z
+    lon_w = x / n * 360.0 - 180.0
+    lon_e = (x + 1) / n * 360.0 - 180.0
+    lat_n = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    lat_s = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+    return lon_w, lat_s, lon_e, lat_n
+
+
+def xyz_to_epsg3857(z, x, y):
+    """Return (minX, minY, maxX, maxY) in EPSG:3857 metres for an XYZ tile."""
+    z, x, y = int(z), int(x), int(y)
+    R = 6378137.0
+    n = 2 ** z
+    left  = x / n * 2 * math.pi * R - math.pi * R
+    right = (x + 1) / n * 2 * math.pi * R - math.pi * R
+    top = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
+    bot = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
+    return left, bot, right, top
+
+
+EMPTY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
+    "AABjkB6QAAAABJRU5ErkJggg=="
+)
+
+
 @app.route("/proxy-tile")
 def proxy_tile():
     """
-    Proxy Sentinel-2 L2A tiles from Copernicus Data Space Sentinel Hub WMS.
+    Fetch a Sentinel-2 L2A tile via the Sentinel Hub Process API.
 
-    Uses EPSG:3857 (Web Mercator) bbox derived from XYZ tile coords, which is
-    what Leaflet's tileLayer produces. The Bearer token is injected server-side
-    so the browser never needs to handle auth headers.
+    The Process API (api/v1/process) works with a plain Bearer token —
+    no configuration instance UUID required. It accepts an evalscript
+    that defines the band maths + output colour mapping.
     """
     layer     = request.args.get("layer", "TRUE-COLOR")
     date_from = request.args.get("dateFrom")
@@ -1102,115 +1191,109 @@ def proxy_tile():
     x         = request.args.get("x", "0")
     y         = request.args.get("y", "0")
 
-    # ── XYZ → EPSG:3857 bounding box ────────────────────────────────────────
-    def xyz_to_epsg3857(z, x, y):
-        z, x, y = int(z), int(x), int(y)
-        R = 6378137.0                   # WGS-84 equatorial radius in metres
-        n = 2 ** z
-        left  = (x / n) * 2 * math.pi * R - math.pi * R
-        right = ((x + 1) / n) * 2 * math.pi * R - math.pi * R
-        top   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
-        bot   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
-        return left, bot, right, top    # minX, minY, maxX, maxY
+    evalscript = EVALSCRIPTS.get(layer, EVALSCRIPTS["TRUE-COLOR"])
+    lon_w, lat_s, lon_e, lat_n = xyz_to_wgs84_bbox(z, x, y)
 
-    minx, miny, maxx, maxy = xyz_to_epsg3857(z, x, y)
+    # Sentinel Hub Process API endpoint for Copernicus Data Space
+    PROCESS_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 
-    # ── Correct Sentinel Hub layer IDs for Copernicus Data Space ────────────
-    # These are the built-in visualization layer names — no custom instance needed.
-    LAYER_MAP = {
-        "TRUE-COLOR":     "TRUE-COLOR",
-        "FALSE-COLOR":    "FALSE-COLOR",
-        "NDVI":           "NDVI",
-        "MOISTURE-INDEX": "MOISTURE-INDEX",
-        "SWIR":           "SWIR",
-        "GEOLOGY":        "GEOLOGY",
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": [lon_w, lat_s, lon_e, lat_n],
+                "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"},
+            },
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {
+                    "timeRange": {
+                        "from": f"{date_from}T00:00:00Z",
+                        "to":   f"{date_to}T23:59:59Z",
+                    },
+                    "maxCloudCoverage": int(cloud),
+                    "mosaickingOrder": "leastCC",   # use least-cloudy scene
+                },
+            }],
+        },
+        "output": {
+            "width":  512,
+            "height": 512,
+            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
+        },
+        "evalscript": evalscript,
     }
-    sh_layer = LAYER_MAP.get(layer, "TRUE-COLOR")
-
-    # ── Copernicus Data Space Sentinel Hub WMS ───────────────────────────────
-    # The correct authenticated WMS endpoint — no instance UUID in the path.
-    # Authentication is via Bearer token in the Authorization header.
-    WMS_ENDPOINT = "https://sh.dataspace.copernicus.eu/ogc/wms"
-
-    params = {
-        "SERVICE":      "WMS",
-        "VERSION":      "1.3.0",
-        "REQUEST":      "GetMap",
-        "FORMAT":       "image/jpeg",
-        "TRANSPARENT":  "FALSE",
-        "LAYERS":       sh_layer,
-        "CRS":          "EPSG:3857",
-        "BBOX":         f"{minx},{miny},{maxx},{maxy}",
-        "WIDTH":        "512",
-        "HEIGHT":       "512",
-        "TIME":         f"{date_from}/{date_to}",
-        "MAXCC":        cloud,
-    }
-
-    EMPTY = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-    )
 
     try:
         hdrs = {
             "Authorization": f"Bearer {COPERNICUS_TOKEN()}",
-            "Accept":        "image/jpeg,image/png,image/*",
+            "Content-Type":  "application/json",
+            "Accept":        "image/png",
         }
-        r = requests.get(WMS_ENDPOINT, params=params, headers=hdrs, timeout=25)
+        r = requests.post(PROCESS_URL, json=payload, headers=hdrs, timeout=30)
         ct = r.headers.get("Content-Type", "")
 
         if r.status_code == 200 and "image" in ct:
             return Response(r.content, content_type=ct)
 
-        # Surface the error to the terminal for easy debugging
-        print(f"[proxy-tile] {r.status_code} | layer={sh_layer} | z={z} x={x} y={y}")
-        print(f"[proxy-tile] response: {r.text[:400]}")
-        return Response(EMPTY, content_type="image/png")
+        print(f"[proxy-tile] {r.status_code} layer={layer} z={z} x={x} y={y}")
+        print(f"[proxy-tile] body: {r.text[:500]}")
+        return Response(EMPTY_PNG, content_type="image/png")
 
     except Exception as exc:
         print(f"[proxy-tile] exception: {exc}")
-        return Response(EMPTY, content_type="image/png")
+        return Response(EMPTY_PNG, content_type="image/png")
 
 
 @app.route("/debug-tile")
 def debug_tile():
     """
-    Hit this in your browser to see exactly what Copernicus returns for one tile.
-    Example: http://localhost:5000/debug-tile
-    Returns JSON with status, content-type, and first 500 chars of body.
+    Visit http://localhost:5000/debug-tile to verify Copernicus connectivity.
+    Returns JSON showing the API response for one test tile over India.
     """
     from datetime import date, timedelta
-    today = date.today().isoformat()
+    today     = date.today().isoformat()
     month_ago = (date.today() - timedelta(days=30)).isoformat()
 
-    # A single representative tile over India (z=5, x=22, y=13)
-    z, x, y = 5, 22, 13
-    R = 6378137.0
-    n = 2 ** z
-    left  = (x / n) * 2 * math.pi * R - math.pi * R
-    right = ((x + 1) / n) * 2 * math.pi * R - math.pi * R
-    top   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
-    bot   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
+    # Test tile: z=8, x=180, y=110 — covers southern India
+    lon_w, lat_s, lon_e, lat_n = xyz_to_wgs84_bbox(8, 180, 110)
 
-    params = {
-        "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
-        "FORMAT": "image/jpeg", "TRANSPARENT": "FALSE",
-        "LAYERS": "TRUE-COLOR", "CRS": "EPSG:3857",
-        "BBOX": f"{left},{bot},{right},{top}",
-        "WIDTH": "512", "HEIGHT": "512",
-        "TIME": f"{month_ago}/{today}", "MAXCC": "50",
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": [lon_w, lat_s, lon_e, lat_n],
+                "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"},
+            },
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {
+                    "timeRange": {"from": f"{month_ago}T00:00:00Z", "to": f"{today}T23:59:59Z"},
+                    "maxCloudCoverage": 50,
+                    "mosaickingOrder": "leastCC",
+                },
+            }],
+        },
+        "output": {
+            "width": 256, "height": 256,
+            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
+        },
+        "evalscript": EVALSCRIPTS["TRUE-COLOR"],
     }
-    hdrs = {"Authorization": f"Bearer {COPERNICUS_TOKEN()}"}
+
+    hdrs = {
+        "Authorization": f"Bearer {COPERNICUS_TOKEN()}",
+        "Content-Type":  "application/json",
+        "Accept":        "image/png",
+    }
     try:
-        r = requests.get("https://sh.dataspace.copernicus.eu/ogc/wms",
-                         params=params, headers=hdrs, timeout=20)
+        r = requests.post("https://sh.dataspace.copernicus.eu/api/v1/process",
+                          json=payload, headers=hdrs, timeout=20)
         return jsonify({
-            "status": r.status_code,
-            "content_type": r.headers.get("Content-Type"),
+            "status":         r.status_code,
+            "content_type":   r.headers.get("Content-Type"),
             "content_length": len(r.content),
-            "body_preview": r.text[:500] if "image" not in r.headers.get("Content-Type","") else "<<image bytes>>",
-            "token_prefix": COPERNICUS_TOKEN()[:30] + "…",
-            "wms_url": r.url,
+            "body_preview":   r.text[:600] if "image" not in r.headers.get("Content-Type","") else "<<IMAGE OK>>",
+            "token_ok":       COPERNICUS_TOKEN() != "",
+            "bbox_tested":    [lon_w, lat_s, lon_e, lat_n],
         })
     except Exception as exc:
         return jsonify({"error": str(exc)})
