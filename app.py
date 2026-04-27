@@ -1087,74 +1087,133 @@ def wms_url():
 
 @app.route("/proxy-tile")
 def proxy_tile():
-    """Proxies Sentinel Hub WMS tile requests with the auth token."""
-    layer = request.args.get("layer", "TRUE-COLOR")
+    """
+    Proxy Sentinel-2 L2A tiles from Copernicus Data Space Sentinel Hub WMS.
+
+    Uses EPSG:3857 (Web Mercator) bbox derived from XYZ tile coords, which is
+    what Leaflet's tileLayer produces. The Bearer token is injected server-side
+    so the browser never needs to handle auth headers.
+    """
+    layer     = request.args.get("layer", "TRUE-COLOR")
     date_from = request.args.get("dateFrom")
-    date_to = request.args.get("dateTo")
-    cloud = request.args.get("cloud", "30")
-    z = request.args.get("z", "5")
-    x = request.args.get("x", "0")
-    y = request.args.get("y", "0")
+    date_to   = request.args.get("dateTo")
+    cloud     = request.args.get("cloud", "30")
+    z         = request.args.get("z", "5")
+    x         = request.args.get("x", "0")
+    y         = request.args.get("y", "0")
 
-    # Convert XYZ tile to bbox
-
-    def tile_to_bbox(z, x, y):
+    # ── XYZ → EPSG:3857 bounding box ────────────────────────────────────────
+    def xyz_to_epsg3857(z, x, y):
         z, x, y = int(z), int(x), int(y)
-        n = 2**z
-        lon_w = x / n * 360.0 - 180.0
-        lon_e = (x + 1) / n * 360.0 - 180.0
-        lat_n_rad = math.atan(math.sinh(math.pi * (1 - 2 * y / n)))
-        lat_s_rad = math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n)))
-        lat_n = math.degrees(lat_n_rad)
-        lat_s = math.degrees(lat_s_rad)
-        return lon_w, lat_s, lon_e, lat_n
+        R = 6378137.0                   # WGS-84 equatorial radius in metres
+        n = 2 ** z
+        left  = (x / n) * 2 * math.pi * R - math.pi * R
+        right = ((x + 1) / n) * 2 * math.pi * R - math.pi * R
+        top   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
+        bot   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
+        return left, bot, right, top    # minX, minY, maxX, maxY
 
-    bbox = tile_to_bbox(z, x, y)
-    bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+    minx, miny, maxx, maxy = xyz_to_epsg3857(z, x, y)
 
-    # WMS request params
-    wms_params = {
-        "SERVICE": "WMS",
-        "VERSION": "1.3.0",
-        "REQUEST": "GetMap",
-        "FORMAT": "image/jpeg",
-        "TRANSPARENT": "FALSE",
-        "LAYERS": layer,
-        "CRS": "EPSG:4326",
-        "BBOX": f"{bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]}",  # lat/lon order for 1.3.0
-        "WIDTH": "256",
-        "HEIGHT": "256",
-        "TIME": f"{date_from}/{date_to}",
-        "MAXCC": cloud,
+    # ── Correct Sentinel Hub layer IDs for Copernicus Data Space ────────────
+    # These are the built-in visualization layer names — no custom instance needed.
+    LAYER_MAP = {
+        "TRUE-COLOR":     "TRUE-COLOR",
+        "FALSE-COLOR":    "FALSE-COLOR",
+        "NDVI":           "NDVI",
+        "MOISTURE-INDEX": "MOISTURE-INDEX",
+        "SWIR":           "SWIR",
+        "GEOLOGY":        "GEOLOGY",
+    }
+    sh_layer = LAYER_MAP.get(layer, "TRUE-COLOR")
+
+    # ── Copernicus Data Space Sentinel Hub WMS ───────────────────────────────
+    # The correct authenticated WMS endpoint — no instance UUID in the path.
+    # Authentication is via Bearer token in the Authorization header.
+    WMS_ENDPOINT = "https://sh.dataspace.copernicus.eu/ogc/wms"
+
+    params = {
+        "SERVICE":      "WMS",
+        "VERSION":      "1.3.0",
+        "REQUEST":      "GetMap",
+        "FORMAT":       "image/jpeg",
+        "TRANSPARENT":  "FALSE",
+        "LAYERS":       sh_layer,
+        "CRS":          "EPSG:3857",
+        "BBOX":         f"{minx},{miny},{maxx},{maxy}",
+        "WIDTH":        "512",
+        "HEIGHT":       "512",
+        "TIME":         f"{date_from}/{date_to}",
+        "MAXCC":        cloud,
     }
 
-    wms_url = "https://sh.dataspace.copernicus.eu/ogc/wms/1635b3a9-a94a-4e94-b82b-f1dda13ab684"
+    EMPTY = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
 
     try:
-        headers = {
+        hdrs = {
             "Authorization": f"Bearer {COPERNICUS_TOKEN()}",
-            "Accept": "image/jpeg",
+            "Accept":        "image/jpeg,image/png,image/*",
         }
-        r = requests.get(wms_url, params=wms_params, headers=headers, timeout=15)
+        r = requests.get(WMS_ENDPOINT, params=params, headers=hdrs, timeout=25)
+        ct = r.headers.get("Content-Type", "")
 
-        if r.status_code == 200 and "image" in r.headers.get("Content-Type", ""):
-            return Response(
-                r.content,
-                content_type=r.headers.get("Content-Type", "image/jpeg"),
-            )
-        else:
-            # Return transparent 1x1 pixel on error
-            empty_png = base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-            )
-            return Response(empty_png, content_type="image/png")
+        if r.status_code == 200 and "image" in ct:
+            return Response(r.content, content_type=ct)
 
-    except Exception as e:
-        empty_png = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-        )
-        return Response(empty_png, content_type="image/png")
-        return Response(empty_png, content_type="image/png")
+        # Surface the error to the terminal for easy debugging
+        print(f"[proxy-tile] {r.status_code} | layer={sh_layer} | z={z} x={x} y={y}")
+        print(f"[proxy-tile] response: {r.text[:400]}")
+        return Response(EMPTY, content_type="image/png")
+
+    except Exception as exc:
+        print(f"[proxy-tile] exception: {exc}")
+        return Response(EMPTY, content_type="image/png")
+
+
+@app.route("/debug-tile")
+def debug_tile():
+    """
+    Hit this in your browser to see exactly what Copernicus returns for one tile.
+    Example: http://localhost:5000/debug-tile
+    Returns JSON with status, content-type, and first 500 chars of body.
+    """
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    month_ago = (date.today() - timedelta(days=30)).isoformat()
+
+    # A single representative tile over India (z=5, x=22, y=13)
+    z, x, y = 5, 22, 13
+    R = 6378137.0
+    n = 2 ** z
+    left  = (x / n) * 2 * math.pi * R - math.pi * R
+    right = ((x + 1) / n) * 2 * math.pi * R - math.pi * R
+    top   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
+    bot   = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
+
+    params = {
+        "SERVICE": "WMS", "VERSION": "1.3.0", "REQUEST": "GetMap",
+        "FORMAT": "image/jpeg", "TRANSPARENT": "FALSE",
+        "LAYERS": "TRUE-COLOR", "CRS": "EPSG:3857",
+        "BBOX": f"{left},{bot},{right},{top}",
+        "WIDTH": "512", "HEIGHT": "512",
+        "TIME": f"{month_ago}/{today}", "MAXCC": "50",
+    }
+    hdrs = {"Authorization": f"Bearer {COPERNICUS_TOKEN()}"}
+    try:
+        r = requests.get("https://sh.dataspace.copernicus.eu/ogc/wms",
+                         params=params, headers=hdrs, timeout=20)
+        return jsonify({
+            "status": r.status_code,
+            "content_type": r.headers.get("Content-Type"),
+            "content_length": len(r.content),
+            "body_preview": r.text[:500] if "image" not in r.headers.get("Content-Type","") else "<<image bytes>>",
+            "token_prefix": COPERNICUS_TOKEN()[:30] + "…",
+            "wms_url": r.url,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)})
 
 
 if __name__ == "__main__":
