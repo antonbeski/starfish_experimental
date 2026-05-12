@@ -1,2 +1,4 @@
-flask>=3.0.0
-yfinance>=0.2.40
+flask>=2.3.0
+pytrends>=4.9.2
+pandas>=2.0.0
+requests>=2.31.0
