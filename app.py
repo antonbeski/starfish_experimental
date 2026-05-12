@@ -1,83 +1,12 @@
-from flask import Flask, render_template_string, jsonify, request, Response
-import requests
-import threading
-import time
-import math
-import base64
+from flask import Flask, render_template_string, request, jsonify
+from pytrends.request import TrendReq
+import pandas as pd
+import json
+import traceback
 from datetime import datetime, timedelta
+import time
 
 app = Flask(__name__)
-
-# ── Token Manager ─────────────────────────────────────────────────────────────
-# Credentials from api.py — edit here if they change
-_CDSE_USERNAME = "antbsk0@gmail.com"
-_CDSE_PASSWORD = "7mK2C=Ysp)PmqE@"
-_TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-_REFRESH_INTERVAL = 27 * 60   # refresh every 27 min (token valid 30 min)
-
-class TokenManager:
-    def __init__(self):
-        self.token: str = ""
-        self.fetched_at: datetime | None = None
-        self.expires_at: datetime | None = None
-        self.lock = threading.Lock()
-        self._refresh()                       # fetch immediately on startup
-        self._start_background_refresh()
-
-    def _refresh(self):
-        try:
-            resp = requests.post(
-                _TOKEN_URL,
-                data={
-                    "client_id": "cdse-public",
-                    "username": _CDSE_USERNAME,
-                    "password": _CDSE_PASSWORD,
-                    "grant_type": "password",
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            with self.lock:
-                self.token = payload["access_token"]
-                self.fetched_at = datetime.utcnow()
-                # Copernicus tokens carry `expires_in` (seconds)
-                expires_in = payload.get("expires_in", 1800)
-                self.expires_at = self.fetched_at + timedelta(seconds=expires_in)
-            print(f"[TokenManager] Token refreshed at {self.fetched_at.strftime('%H:%M:%S')} UTC "
-                  f"(expires in {expires_in}s)")
-        except Exception as exc:
-            print(f"[TokenManager] ERROR refreshing token: {exc}")
-
-    def _start_background_refresh(self):
-        def _loop():
-            while True:
-                time.sleep(_REFRESH_INTERVAL)
-                self._refresh()
-        t = threading.Thread(target=_loop, daemon=True)
-        t.start()
-
-    def get(self) -> str:
-        with self.lock:
-            return self.token
-
-    def status(self) -> dict:
-        with self.lock:
-            remaining = None
-            if self.expires_at:
-                remaining = max(0, int((self.expires_at - datetime.utcnow()).total_seconds()))
-            return {
-                "fetched_at": self.fetched_at.strftime("%H:%M:%S UTC") if self.fetched_at else "—",
-                "expires_at": self.expires_at.strftime("%H:%M:%S UTC") if self.expires_at else "—",
-                "remaining_seconds": remaining,
-                "token_prefix": self.token[:16] + "…" if self.token else "none",
-            }
-
-_token_mgr = TokenManager()
-
-# Compatibility shim so all existing code that reads COPERNICUS_TOKEN still works
-def COPERNICUS_TOKEN() -> str:   # noqa: N802 — intentional function-as-constant pattern
-    return _token_mgr.get()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -85,1224 +14,1220 @@ HTML_TEMPLATE = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SENTINEL EYE — Satellite Viewer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<title>TrendScope — Google Trends Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --void: #050810;
-    --deep: #0a1020;
-    --panel: #0e1628;
-    --border: #1a2840;
-    --accent: #00e5ff;
-    --accent2: #7c3aed;
-    --warn: #f59e0b;
-    --text: #c8d8f0;
-    --muted: #4a6080;
-    --success: #10b981;
-    --danger: #ef4444;
+    --bg: #050508;
+    --surface: #0d0d14;
+    --card: #111118;
+    --border: #1e1e2e;
+    --accent: #00ff9d;
+    --accent2: #ff3cac;
+    --accent3: #7b5ea7;
+    --accent4: #f7c59f;
+    --text: #e8e8f0;
+    --muted: #5a5a7a;
+    --glow: rgba(0,255,157,0.15);
   }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
   body {
-    background: var(--void);
+    background: var(--bg);
     color: var(--text);
-    font-family: 'Space Mono', monospace;
-    height: 100vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
   }
-
-  /* Scanline overlay */
   body::before {
     content: '';
     position: fixed;
     inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0, 229, 255, 0.015) 2px,
-      rgba(0, 229, 255, 0.015) 4px
-    );
+    background-image:
+      linear-gradient(rgba(0,255,157,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,157,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
     pointer-events: none;
-    z-index: 9999;
+    z-index: 0;
   }
+  .container { max-width: 1400px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
 
-  /* ── HEADER ── */
   header {
+    padding: 32px 24px 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 24px;
-    height: 56px;
-    background: var(--deep);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    max-width: 1400px;
+    margin: 0 auto;
     position: relative;
-    z-index: 100;
+    z-index: 1;
   }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .logo-icon {
-    width: 32px;
-    height: 32px;
-    border: 2px solid var(--accent);
-    border-radius: 50%;
-    position: relative;
-    animation: orbit-spin 6s linear infinite;
-  }
-
-  .logo-icon::before {
-    content: '';
-    position: absolute;
-    inset: 4px;
-    background: var(--accent);
-    border-radius: 50%;
-    opacity: 0.3;
-  }
-
-  .logo-icon::after {
-    content: '';
-    position: absolute;
-    top: -6px; left: 50%;
-    transform: translateX(-50%);
-    width: 6px; height: 6px;
-    background: var(--accent);
-    border-radius: 50%;
-    box-shadow: 0 0 8px var(--accent);
-  }
-
-  @keyframes orbit-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .logo-text {
-    font-family: 'Syne', sans-serif;
-    font-weight: 800;
-    font-size: 18px;
-    letter-spacing: 0.15em;
-    color: #fff;
-  }
-
-  .logo-text span {
-    color: var(--accent);
-  }
-
-  .header-status {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 0.05em;
-  }
-
-  .status-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    background: rgba(0,229,255,0.04);
-  }
-
-  .status-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--success);
-    box-shadow: 0 0 6px var(--success);
-    animation: pulse-dot 2s ease-in-out infinite;
-  }
-
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-
-  .utc-clock {
-    font-size: 12px;
-    color: var(--accent);
+  .logo { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: var(--accent); }
+  .logo small {
     font-family: 'Space Mono', monospace;
-    letter-spacing: 0.05em;
-  }
-
-  /* ── MAIN LAYOUT ── */
-  .app-body {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  /* ── SIDEBAR ── */
-  .sidebar {
-    width: 320px;
-    flex-shrink: 0;
-    background: var(--panel);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    z-index: 50;
-  }
-
-  .sidebar-section {
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .section-label {
     font-size: 9px;
-    letter-spacing: 0.2em;
     color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: block;
+    letter-spacing: 3px;
+    margin-top: 2px;
   }
-
-  .section-label::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+    animation: pulse 2s infinite;
   }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.3)} }
 
-  /* Search */
-  .search-wrap {
+  .hero {
+    padding: 60px 24px 40px;
+    max-width: 1400px;
+    margin: 0 auto;
     position: relative;
+    z-index: 1;
   }
-
-  .search-input {
-    width: 100%;
-    background: var(--deep);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 10px 40px 10px 14px;
+  .hero h1 {
+    font-size: clamp(32px, 5vw, 60px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -2px;
+  }
+  .hero h1 em {
+    font-style: normal;
+    color: transparent;
+    -webkit-text-stroke: 1px var(--accent);
+  }
+  .hero p {
     font-family: 'Space Mono', monospace;
-    font-size: 12px;
-    border-radius: 4px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-
-  .search-input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(0,229,255,0.1);
-  }
-
-  .search-input::placeholder { color: var(--muted); }
-
-  .search-btn {
-    position: absolute;
-    right: 0; top: 0; bottom: 0;
-    width: 40px;
-    background: none;
-    border: none;
-    color: var(--accent);
-    cursor: pointer;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: opacity 0.2s;
-  }
-  .search-btn:hover { opacity: 0.7; }
-
-  .search-results {
-    margin-top: 8px;
-    display: none;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 160px;
-    overflow-y: auto;
-  }
-
-  .search-result-item {
-    padding: 8px 12px;
-    background: var(--deep);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    cursor: pointer;
     font-size: 11px;
-    color: var(--text);
-    transition: border-color 0.15s, background 0.15s;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .search-result-item:hover {
-    border-color: var(--accent);
-    background: rgba(0,229,255,0.05);
-    color: var(--accent);
-  }
-
-  /* Layer selector */
-  .layer-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-  }
-
-  .layer-btn {
-    padding: 8px 10px;
-    background: var(--deep);
-    border: 1px solid var(--border);
-    border-radius: 4px;
     color: var(--muted);
+    margin-top: 10px;
+    letter-spacing: 1px;
+  }
+
+  .search-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    margin: 0 24px 28px;
+    max-width: 1352px;
+    margin-left: auto;
+    margin-right: auto;
+    position: relative;
+    z-index: 1;
+  }
+  .search-panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    border-radius: 16px 16px 0 0;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+  .search-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 150px;
+  }
+  .field-group label {
     font-family: 'Space Mono', monospace;
     font-size: 10px;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.15s;
-    line-height: 1.4;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
   }
-
-  .layer-btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: rgba(0,229,255,0.07);
-    box-shadow: 0 0 8px rgba(0,229,255,0.15);
-  }
-
-  .layer-btn:hover:not(.active) {
-    border-color: var(--muted);
-    color: var(--text);
-  }
-
-  .layer-name { font-weight: 700; display: block; }
-  .layer-desc { color: var(--muted); font-size: 9px; margin-top: 2px; display: block; }
-  .layer-btn.active .layer-desc { color: rgba(0,229,255,0.6); }
-
-  /* Date picker */
-  .date-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .date-input {
-    flex: 1;
-    background: var(--deep);
+  .field-group input,
+  .field-group select {
+    background: var(--surface);
     border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 14px;
     color: var(--text);
-    padding: 8px 10px;
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
-    border-radius: 4px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
     outline: none;
-    transition: border-color 0.2s;
-  }
-
-  .date-input:focus { border-color: var(--accent); }
-  .date-label { font-size: 9px; color: var(--muted); }
-
-  /* Cloud cover slider */
-  .slider-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 8px;
-  }
-
-  .slider-label { font-size: 10px; color: var(--muted); white-space: nowrap; }
-  .slider-val { font-size: 11px; color: var(--accent); min-width: 32px; text-align: right; }
-
-  input[type=range] {
-    flex: 1;
-    appearance: none;
-    height: 3px;
-    background: var(--border);
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-  }
-
-  input[type=range]::-webkit-slider-thumb {
-    appearance: none;
-    width: 14px; height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 6px var(--accent);
-    cursor: pointer;
-  }
-
-  /* Apply button */
-  .apply-btn {
+    transition: border-color 0.2s, box-shadow 0.2s;
     width: 100%;
-    padding: 12px;
-    background: linear-gradient(135deg, var(--accent2), var(--accent));
+  }
+  .field-group input:focus,
+  .field-group select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--glow);
+  }
+  .field-group input::placeholder { color: var(--muted); }
+  select option { background: #0d0d14; }
+
+  .btn-analyze {
+    background: var(--accent);
+    color: #000;
     border: none;
-    border-radius: 4px;
-    color: #fff;
+    border-radius: 8px;
+    padding: 11px 28px;
     font-family: 'Syne', sans-serif;
     font-weight: 700;
-    font-size: 12px;
-    letter-spacing: 0.15em;
+    font-size: 14px;
     cursor: pointer;
-    transition: opacity 0.2s, transform 0.1s;
-    text-transform: uppercase;
+    transition: all 0.2s;
+    white-space: nowrap;
+    letter-spacing: 0.5px;
   }
+  .btn-analyze:hover { background: #00e68a; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,255,157,0.3); }
+  .btn-analyze:active { transform: translateY(0); }
 
-  .apply-btn:hover { opacity: 0.9; }
-  .apply-btn:active { transform: scale(0.98); }
-  .apply-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  /* Info panel */
-  .info-panel {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
+  .tabs-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
   }
-
-  .info-card {
-    background: var(--deep);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 12px;
-    margin-bottom: 10px;
+  .tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-
-  .info-card-label {
-    font-size: 9px;
-    letter-spacing: 0.15em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }
-
-  .info-card-value {
-    font-size: 12px;
-    color: var(--text);
-    word-break: break-all;
-  }
-
-  .info-card-value.highlight { color: var(--accent); }
-
-  .log-area {
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    background: none;
+    border: none;
+    padding: 10px 16px;
+    font-family: 'Space Mono', monospace;
     font-size: 10px;
     color: var(--muted);
-    line-height: 1.8;
-    max-height: 120px;
-    overflow-y: auto;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: -1px;
   }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-  .log-entry { padding: 2px 0; }
-  .log-entry.ok { color: var(--success); }
-  .log-entry.err { color: var(--danger); }
-  .log-entry.info { color: var(--accent); }
-
-  /* ── MAP ── */
-  .map-wrap {
-    flex: 1;
+  .content {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 28px 24px 60px;
     position: relative;
-    overflow: hidden;
+    z-index: 1;
   }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
 
-  #map {
-    width: 100%;
-    height: 100%;
-  }
-
-  /* Leaflet dark override */
-  .leaflet-container {
-    background: var(--void) !important;
-  }
-
-  .leaflet-control-zoom {
-    border: 1px solid var(--border) !important;
-    background: var(--panel) !important;
-  }
-
-  .leaflet-control-zoom a {
-    background: var(--panel) !important;
-    color: var(--accent) !important;
-    border-color: var(--border) !important;
-    font-family: 'Space Mono', monospace !important;
-    line-height: 26px !important;
-  }
-
-  .leaflet-control-zoom a:hover {
-    background: var(--deep) !important;
-  }
-
-  /* Map overlay coords */
-  .map-coords {
-    position: absolute;
-    bottom: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(10,16,32,0.85);
+  .card {
+    background: var(--card);
     border: 1px solid var(--border);
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 11px;
-    color: var(--muted);
-    pointer-events: none;
-    z-index: 1000;
-    backdrop-filter: blur(4px);
-    letter-spacing: 0.05em;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    position: relative;
   }
+  .card-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title::before {
+    content: '';
+    width: 3px; height: 12px;
+    background: var(--accent);
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media(max-width:900px) { .grid-2 { grid-template-columns: 1fr; } }
 
-  .map-coords span { color: var(--accent); }
+  .chart-wrap { position: relative; height: 300px; }
+  .chart-wrap-tall { position: relative; height: 400px; }
 
-  /* Loading overlay */
-  .map-loading {
-    position: absolute;
-    inset: 0;
-    background: rgba(5,8,16,0.75);
+  #loader {
     display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(5,5,8,0.88);
+    z-index: 1000;
     align-items: center;
     justify-content: center;
     flex-direction: column;
     gap: 16px;
-    z-index: 500;
-    backdrop-filter: blur(2px);
+    backdrop-filter: blur(6px);
   }
-
-  .map-loading.show { display: flex; }
-
+  #loader.show { display: flex; }
   .loader-ring {
-    width: 48px; height: 48px;
+    width: 44px; height: 44px;
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
-
   @keyframes spin { to { transform: rotate(360deg); } }
-
   .loader-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 3px;
+  }
+
+  #alert-box {
+    display: none;
+    background: rgba(255,60,172,0.1);
+    border: 1px solid var(--accent2);
+    border-radius: 8px;
+    padding: 12px 18px;
+    margin: 0 24px 16px;
+    max-width: 1352px;
+    margin-left: auto;
+    margin-right: auto;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--accent2);
+    position: relative;
+    z-index: 1;
+  }
+  #alert-box.show { display: block; }
+
+  .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat-pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    flex: 1;
+    min-width: 110px;
+  }
+  .stat-val {
+    font-size: 30px;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .stat-lbl {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    margin-top: 4px;
+    text-transform: uppercase;
+  }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table th {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+  }
+  .data-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(30,30,46,0.5);
+    color: var(--text);
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: rgba(0,255,157,0.03); }
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .badge-rise { background: rgba(0,255,157,0.15); color: var(--accent); }
+  .badge-top  { background: rgba(247,197,159,0.15); color: var(--accent4); }
+
+  .bar-track {
+    background: var(--surface);
+    border-radius: 3px;
+    height: 5px;
+    overflow: hidden;
+    margin-top: 4px;
+    flex: 1;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent3), var(--accent));
+    transition: width 0.6s cubic-bezier(0.16,1,0.3,1);
+  }
+
+  .region-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(30,30,46,0.4);
+  }
+  .region-item:last-child { border-bottom: none; }
+  .region-name { flex: 1.2; font-size: 12px; }
+  .region-val {
+    font-family: 'Space Mono', monospace;
     font-size: 11px;
     color: var(--accent);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    animation: blink 1.2s ease-in-out infinite;
+    min-width: 32px;
+    text-align: right;
   }
 
-  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    padding: 10px 18px;
-    border-radius: 4px;
-    font-size: 12px;
-    z-index: 9999;
-    display: none;
-    border: 1px solid;
+  .trend-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(30,30,46,0.4);
+  }
+  .trend-item:last-child { border-bottom: none; }
+  .trend-num {
     font-family: 'Space Mono', monospace;
-    animation: toast-in 0.3s ease;
+    font-size: 10px;
+    color: var(--muted);
+    min-width: 22px;
+  }
+  .trend-kw { flex: 1; font-size: 13px; font-weight: 600; }
+  .trend-traffic { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--accent2); }
+
+  .empty {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
   }
 
-  @keyframes toast-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+  .placeholder-state {
+    min-height: 280px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    color: var(--muted);
+  }
+  .placeholder-state .big { font-size: 44px; opacity: 0.2; }
+  .placeholder-state p {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-align: center;
+    line-height: 1.8;
   }
 
-  .toast.ok { background: rgba(16,185,129,0.15); border-color: var(--success); color: var(--success); }
-  .toast.err { background: rgba(239,68,68,0.15); border-color: var(--danger); color: var(--danger); }
+  .kw-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    margin: 4px;
+  }
+  .kw-tag .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-  /* Scrollbar */
   ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: var(--deep); }
+  ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 </style>
 </head>
 <body>
 
+<div id="loader">
+  <div class="loader-ring"></div>
+  <div class="loader-text">FETCHING TRENDS DATA ...</div>
+</div>
+
 <header>
   <div class="logo">
-    <div class="logo-icon"></div>
-    <div class="logo-text">SENTINEL<span>EYE</span></div>
+    Trend<span>Scope</span>
+    <small>GOOGLE TRENDS INTELLIGENCE DASHBOARD</small>
   </div>
-  <div class="header-status">
-    <div class="status-pill">
-      <div class="status-dot"></div>
-      <span>COPERNICUS LIVE</span>
-    </div>
-    <div class="status-pill" id="tokenPill" title="Token auto-refreshes every 27 min">
-      <div class="status-dot" id="tokenDot" style="background:var(--success);box-shadow:0 0 6px var(--success)"></div>
-      <span>TOKEN&nbsp;<span id="tokenCountdown">--:--</span></span>
-    </div>
-    <div class="utc-clock" id="utcClock">--:--:-- UTC</div>
-  </div>
+  <div class="status-dot"></div>
 </header>
 
-<div class="app-body">
-  <div class="sidebar">
+<div class="hero">
+  <h1>Decode What the<br>World is <em>Searching</em></h1>
+  <p>// interest over time &bull; regional breakdown &bull; related topics &bull; trending queries</p>
+</div>
 
-    <!-- SEARCH -->
-    <div class="sidebar-section">
-      <div class="section-label">Location Search</div>
-      <div class="search-wrap">
-        <input class="search-input" id="searchInput" type="text"
-               placeholder="Search city, country, coordinates…"
-               autocomplete="off">
-        <button class="search-btn" onclick="searchLocation()">⌕</button>
-      </div>
-      <div class="search-results" id="searchResults"></div>
-    </div>
+<div id="alert-box"></div>
 
-    <!-- LAYER -->
-    <div class="sidebar-section">
-      <div class="section-label">Satellite Layer</div>
-      <div class="layer-grid">
-        <button class="layer-btn active" data-layer="TRUE-COLOR" onclick="selectLayer(this)">
-          <span class="layer-name">TRUE COLOR</span>
-          <span class="layer-desc">Natural RGB</span>
-        </button>
-        <button class="layer-btn" data-layer="FALSE-COLOR" onclick="selectLayer(this)">
-          <span class="layer-name">FALSE COLOR</span>
-          <span class="layer-desc">NIR vegetation</span>
-        </button>
-        <button class="layer-btn" data-layer="NDVI" onclick="selectLayer(this)">
-          <span class="layer-name">NDVI</span>
-          <span class="layer-desc">Vegetation index</span>
-        </button>
-        <button class="layer-btn" data-layer="MOISTURE-INDEX" onclick="selectLayer(this)">
-          <span class="layer-name">MOISTURE</span>
-          <span class="layer-desc">Soil/water index</span>
-        </button>
-        <button class="layer-btn" data-layer="SWIR" onclick="selectLayer(this)">
-          <span class="layer-name">SWIR</span>
-          <span class="layer-desc">Shortwave IR</span>
-        </button>
-        <button class="layer-btn" data-layer="GEOLOGY" onclick="selectLayer(this)">
-          <span class="layer-name">GEOLOGY</span>
-          <span class="layer-desc">Geological bands</span>
-        </button>
-      </div>
+<div class="search-panel">
+  <div class="search-row">
+    <div class="field-group" style="flex:2;min-width:200px">
+      <label>Primary Keyword</label>
+      <input type="text" id="keyword" placeholder="e.g. Bitcoin, Artificial Intelligence, Climate Change" />
     </div>
-
-    <!-- DATE RANGE -->
-    <div class="sidebar-section">
-      <div class="section-label">Date Range</div>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        <div>
-          <div class="date-label" style="margin-bottom:4px;">FROM</div>
-          <input class="date-input" type="date" id="dateFrom">
-        </div>
-        <div>
-          <div class="date-label" style="margin-bottom:4px;">TO</div>
-          <input class="date-input" type="date" id="dateTo">
-        </div>
-      </div>
-      <div class="slider-row">
-        <span class="slider-label">Cloud cover ≤</span>
-        <input type="range" id="cloudSlider" min="0" max="100" value="30"
-               oninput="document.getElementById('cloudVal').textContent=this.value+'%'">
-        <span class="slider-val" id="cloudVal">30%</span>
-      </div>
-      <div style="margin-top:12px;">
-        <button class="apply-btn" id="applyBtn" onclick="applyLayer()">
-          ⬡ LOAD SATELLITE DATA
-        </button>
-      </div>
+    <div class="field-group">
+      <label>Compare Keywords (comma-separated, max 4 extras)</label>
+      <input type="text" id="compare_kw" placeholder="e.g. Ethereum, NFT" />
     </div>
-
-    <!-- INFO -->
-    <div class="info-panel">
-      <div class="section-label" style="font-size:9px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
-        Session Log <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
-      </div>
-      <div class="info-card">
-        <div class="info-card-label">Active Layer</div>
-        <div class="info-card-value highlight" id="infoLayer">TRUE-COLOR</div>
-      </div>
-      <div class="info-card">
-        <div class="info-card-label">View Center</div>
-        <div class="info-card-value" id="infoCenter">20.00°N, 77.00°E</div>
-      </div>
-      <div class="info-card">
-        <div class="info-card-label">Zoom Level</div>
-        <div class="info-card-value" id="infoZoom">5</div>
-      </div>
-      <div class="log-area" id="logArea">
-        <div class="log-entry info">▸ System initialised</div>
-        <div class="log-entry info">▸ Copernicus token loaded</div>
-      </div>
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="timeframe">
+        <option value="now 1-d">Last 24 Hours</option>
+        <option value="now 7-d">Last 7 Days</option>
+        <option value="today 1-m">Last 30 Days</option>
+        <option value="today 3-m" selected>Last 90 Days</option>
+        <option value="today 12-m">Last 12 Months</option>
+        <option value="today 5-y">Last 5 Years</option>
+        <option value="all">All Time</option>
+      </select>
     </div>
-
-  </div>
-
-  <!-- MAP -->
-  <div class="map-wrap">
-    <div id="map"></div>
-    <div class="map-loading" id="mapLoading">
-      <div class="loader-ring"></div>
-      <div class="loader-text">FETCHING SATELLITE DATA…</div>
+    <div class="field-group">
+      <label>Region</label>
+      <select id="geo">
+        <option value="">Worldwide</option>
+        <option value="US">United States</option>
+        <option value="GB">United Kingdom</option>
+        <option value="IN">India</option>
+        <option value="CA">Canada</option>
+        <option value="AU">Australia</option>
+        <option value="DE">Germany</option>
+        <option value="FR">France</option>
+        <option value="JP">Japan</option>
+        <option value="BR">Brazil</option>
+        <option value="SG">Singapore</option>
+        <option value="KR">South Korea</option>
+        <option value="ZA">South Africa</option>
+      </select>
     </div>
-    <div class="map-coords" id="mapCoords">
-      LAT <span id="coordLat">--</span> &nbsp;|&nbsp; LON <span id="coordLon">--</span>
+    <div class="field-group">
+      <label>Category</label>
+      <select id="cat">
+        <option value="0">All Categories</option>
+        <option value="7">Finance</option>
+        <option value="8">Food &amp; Drink</option>
+        <option value="174">Technology</option>
+        <option value="11">Health</option>
+        <option value="57">Sports</option>
+        <option value="958">Business &amp; Industrial</option>
+        <option value="16">News</option>
+        <option value="22">Arts &amp; Entertainment</option>
+        <option value="71">Travel</option>
+      </select>
     </div>
+    <div class="field-group">
+      <label>Property</label>
+      <select id="gprop">
+        <option value="">Web Search</option>
+        <option value="images">Image Search</option>
+        <option value="news">News Search</option>
+        <option value="youtube">YouTube</option>
+        <option value="froogle">Shopping</option>
+      </select>
+    </div>
+    <button class="btn-analyze" onclick="analyze()">&#9654; Analyze</button>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="tabs-container">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="overview" onclick="switchTab(this,'overview')">Overview</button>
+    <button class="tab-btn" data-tab="regions" onclick="switchTab(this,'regions')">Regions</button>
+    <button class="tab-btn" data-tab="related" onclick="switchTab(this,'related')">Related Topics</button>
+    <button class="tab-btn" data-tab="queries" onclick="switchTab(this,'queries')">Related Queries</button>
+    <button class="tab-btn" data-tab="trending" onclick="switchTab(this,'trending')">Trending Now</button>
+    <button class="tab-btn" data-tab="compare" onclick="switchTab(this,'compare')">Comparison</button>
+    <button class="tab-btn" data-tab="hourly" onclick="switchTab(this,'hourly')">Hourly</button>
+  </div>
+</div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div class="content">
+
+  <!-- OVERVIEW -->
+  <div class="tab-pane active" id="tab-overview">
+    <div id="overview-placeholder" class="placeholder-state">
+      <div class="big">&#128225;</div>
+      <p>ENTER A KEYWORD ABOVE<br>AND CLICK ANALYZE TO BEGIN</p>
+    </div>
+    <div id="overview-content" style="display:none">
+      <div class="stats-row" id="stats-row"></div>
+      <div class="card">
+        <div class="card-title">Interest Over Time (indexed 0-100)</div>
+        <div class="chart-wrap"><canvas id="iotChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REGIONS -->
+  <div class="tab-pane" id="tab-regions">
+    <div id="regions-placeholder" class="placeholder-state">
+      <div class="big">&#127758;</div>
+      <p>RUN ANALYSIS TO SEE REGIONAL BREAKDOWN</p>
+    </div>
+    <div id="regions-content" style="display:none">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Interest by Country</div>
+          <div id="countries-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Interest by City</div>
+          <div id="cities-list"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Top 10 Countries — Bar Chart</div>
+        <div class="chart-wrap"><canvas id="regionsChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RELATED TOPICS -->
+  <div class="tab-pane" id="tab-related">
+    <div id="related-placeholder" class="placeholder-state">
+      <div class="big">&#128279;</div>
+      <p>RUN ANALYSIS TO DISCOVER RELATED TOPICS</p>
+    </div>
+    <div id="related-content" style="display:none">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Top Related Topics</div>
+          <div id="related-top-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Rising Related Topics</div>
+          <div id="related-rising-list"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Rising Topics — Value Chart</div>
+        <div class="chart-wrap"><canvas id="risingTopicsChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- QUERIES -->
+  <div class="tab-pane" id="tab-queries">
+    <div id="queries-placeholder" class="placeholder-state">
+      <div class="big">&#128269;</div>
+      <p>RUN ANALYSIS TO EXTRACT RELATED QUERIES</p>
+    </div>
+    <div id="queries-content" style="display:none">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Top Queries</div>
+          <div id="top-queries-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Rising Queries</div>
+          <div id="rising-queries-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRENDING -->
+  <div class="tab-pane" id="tab-trending">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Daily Trending Searches</div>
+        <div id="daily-trending-list">
+          <div class="empty">Click Analyze to load trending searches</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Top Trending — Volume Rank</div>
+        <div class="chart-wrap"><canvas id="trendingChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPARISON -->
+  <div class="tab-pane" id="tab-compare">
+    <div id="compare-placeholder" class="placeholder-state">
+      <div class="big">&#9889;</div>
+      <p>ADD COMPARISON KEYWORDS IN THE SEARCH BAR<br>THEN CLICK ANALYZE</p>
+    </div>
+    <div id="compare-content" style="display:none">
+      <div id="kw-tags" style="margin-bottom:16px"></div>
+      <div class="card">
+        <div class="card-title">Keyword Comparison — Interest Over Time</div>
+        <div class="chart-wrap-tall"><canvas id="compareChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Average Interest Score per Keyword</div>
+        <div class="chart-wrap"><canvas id="compareBarChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HOURLY -->
+  <div class="tab-pane" id="tab-hourly">
+    <div id="hourly-placeholder" class="placeholder-state">
+      <div class="big">&#9201;</div>
+      <p>RUN ANALYSIS TO FETCH GRANULAR HOURLY DATA<br>(LAST 7 DAYS)</p>
+    </div>
+    <div id="hourly-content" style="display:none">
+      <div class="card">
+        <div class="card-title">Hourly Interest — Last 7 Days</div>
+        <div class="chart-wrap-tall"><canvas id="hourlyChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
 <script>
-// ── State ──────────────────────────────────────────────────────────────────
-let map, sentinelLayer = null;
-let currentLayer = 'TRUE-COLOR';
+const COLORS = ['#00ff9d','#ff3cac','#7b5ea7','#f7c59f','#38bdf8'];
+let charts = {};
 
-// ── UTC Clock ──────────────────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  const h = String(now.getUTCHours()).padStart(2,'0');
-  const m = String(now.getUTCMinutes()).padStart(2,'0');
-  const s = String(now.getUTCSeconds()).padStart(2,'0');
-  document.getElementById('utcClock').textContent = h+':'+m+':'+s+' UTC';
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-// ── Token Countdown ────────────────────────────────────────────────────────
-async function updateTokenStatus() {
-  try {
-    const res = await fetch('/token-status');
-    const d = await res.json();
-    const sec = d.remaining_seconds;
-    if (sec === null || sec === undefined) return;
-    const m = String(Math.floor(sec / 60)).padStart(2, '0');
-    const s = String(sec % 60).padStart(2, '0');
-    document.getElementById('tokenCountdown').textContent = m + ':' + s;
-    const dot = document.getElementById('tokenDot');
-    if (sec < 120) {
-      dot.style.background = 'var(--danger)';
-      dot.style.boxShadow = '0 0 6px var(--danger)';
-    } else if (sec < 300) {
-      dot.style.background = 'var(--warn)';
-      dot.style.boxShadow = '0 0 6px var(--warn)';
-    } else {
-      dot.style.background = 'var(--success)';
-      dot.style.boxShadow = '0 0 6px var(--success)';
-    }
-  } catch(e) { /* silent */ }
-}
-updateTokenStatus();
-setInterval(updateTokenStatus, 30000);
-
-// ── Default Dates ──────────────────────────────────────────────────────────
-(function setDates() {
-  const today = new Date();
-  const prior = new Date(today); prior.setDate(prior.getDate() - 30);
-  const fmt = d => d.toISOString().split('T')[0];
-  document.getElementById('dateTo').value = fmt(today);
-  document.getElementById('dateFrom').value = fmt(prior);
-})();
-
-// ── Map Init ───────────────────────────────────────────────────────────────
-map = L.map('map', {
-  center: [20, 77],
-  zoom: 5,
-  zoomControl: true,
-  attributionControl: false
-});
-
-// Dark base tiles
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19
-}).addTo(map);
-
-map.on('mousemove', e => {
-  document.getElementById('coordLat').textContent = e.latlng.lat.toFixed(4) + '°';
-  document.getElementById('coordLon').textContent = e.latlng.lng.toFixed(4) + '°';
-});
-
-map.on('moveend', () => {
-  const c = map.getCenter();
-  document.getElementById('infoCenter').textContent =
-    Math.abs(c.lat).toFixed(4)+'°'+(c.lat>=0?'N':'S')+', '+
-    Math.abs(c.lng).toFixed(4)+'°'+(c.lng>=0?'E':'W');
-  document.getElementById('infoZoom').textContent = map.getZoom();
-});
-
-// ── Log ────────────────────────────────────────────────────────────────────
-function log(msg, type='info') {
-  const area = document.getElementById('logArea');
-  const el = document.createElement('div');
-  el.className = 'log-entry ' + type;
-  const icons = {info:'▸', ok:'✓', err:'✕'};
-  el.textContent = (icons[type]||'▸') + ' ' + msg;
-  area.appendChild(el);
-  area.scrollTop = area.scrollHeight;
-}
-
-// ── Toast ──────────────────────────────────────────────────────────────────
-function showToast(msg, type='ok') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast ' + type;
-  t.style.display = 'block';
-  setTimeout(() => t.style.display = 'none', 3500);
-}
-
-// ── Layer Selection ────────────────────────────────────────────────────────
-function selectLayer(btn) {
-  document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+function switchTab(btn, name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  currentLayer = btn.dataset.layer;
-  document.getElementById('infoLayer').textContent = currentLayer;
-  log('Layer selected: '+currentLayer);
 }
 
-// ── Build WMS URL via backend ──────────────────────────────────────────────
-async function applyLayer() {
-  const dateFrom = document.getElementById('dateFrom').value;
-  const dateTo   = document.getElementById('dateTo').value;
-  const cloud    = document.getElementById('cloudSlider').value;
-  const btn      = document.getElementById('applyBtn');
-
-  if (!dateFrom || !dateTo) { showToast('Set date range first', 'err'); return; }
-
-  btn.disabled = true;
-  document.getElementById('mapLoading').classList.add('show');
-  log('Requesting '+currentLayer+' imagery…');
-
-  try {
-    // Remove existing satellite layer
-    if (sentinelLayer) { map.removeLayer(sentinelLayer); sentinelLayer = null; }
-
-    const bounds = map.getBounds();
-    const params = new URLSearchParams({
-      layer: currentLayer,
-      dateFrom, dateTo,
-      cloud,
-      minLon: bounds.getWest(),
-      minLat: bounds.getSouth(),
-      maxLon: bounds.getEast(),
-      maxLat: bounds.getNorth()
-    });
-
-    const res = await fetch('/wms-url?' + params);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Backend error');
-
-    sentinelLayer = L.tileLayer.wms(data.wms_url, {
-      layers: data.layer_id,
-      format: 'image/jpeg',
-      transparent: false,
-      version: '1.3.0',
-      time: data.time_range,
-      maxcc: cloud,
-      opacity: 0.95,
-      maxZoom: 18,
-      headers: { Authorization: 'Bearer ' + data.token }
-    });
-
-    // Since Leaflet WMS doesn't support custom headers natively,
-    // we use the tile URL with the token embedded via the backend proxy
-    sentinelLayer = L.tileLayer(data.tile_url + '&z={z}&x={x}&y={y}', {
-      maxZoom: 18,
-      opacity: 0.9,
-      tileSize: 256,
-      attribution: '© Copernicus/ESA'
-    });
-
-    sentinelLayer.addTo(map);
-    log('Layer loaded: '+currentLayer, 'ok');
-    showToast('Satellite layer loaded ✓');
-
-    document.getElementById('infoLayer').textContent = currentLayer + ' ✓';
-
-  } catch(err) {
-    log('Error: '+err.message, 'err');
-    showToast('Failed: '+err.message, 'err');
-
-    // Fallback: load WMS directly from Sentinel Hub public endpoint
-    loadDirectWMS(dateFrom, dateTo, cloud);
-  } finally {
-    btn.disabled = false;
-    document.getElementById('mapLoading').classList.remove('show');
-  }
+function showLoader(v) {
+  document.getElementById('loader').classList.toggle('show', v);
+}
+function showAlert(msg) {
+  const el = document.getElementById('alert-box');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 8000);
 }
 
-// ── Direct WMS fallback (Sentinel Hub WMS with token) ─────────────────────
-function loadDirectWMS(dateFrom, dateTo, cloud) {
-  if (sentinelLayer) { map.removeLayer(sentinelLayer); sentinelLayer = null; }
-
-  // Use Copernicus Browser WMS endpoint
-  const wmsBase = 'https://sh.dataspace.copernicus.eu/ogc/wms/TOKEN_PLACEHOLDER';
-  // We'll fetch via our backend proxy which injects the auth header
-  const proxyUrl = '/proxy-tile?layer='+currentLayer+
-    '&dateFrom='+dateFrom+'&dateTo='+dateTo+'&cloud='+cloud+
-    '&z={z}&x={x}&y={y}';
-
-  sentinelLayer = L.tileLayer(proxyUrl, {
-    maxZoom: 18,
-    opacity: 0.9,
-    tileSize: 256,
-    attribution: '© Copernicus/ESA'
-  });
-
-  sentinelLayer.addTo(map);
-  log('Fallback WMS layer active', 'ok');
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
 }
 
-// ── Location Search ────────────────────────────────────────────────────────
-let searchTimeout;
-document.getElementById('searchInput').addEventListener('input', function() {
-  clearTimeout(searchTimeout);
-  const q = this.value.trim();
-  if (q.length < 3) { hideResults(); return; }
-  searchTimeout = setTimeout(() => geocode(q), 400);
-});
-
-document.getElementById('searchInput').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') { clearTimeout(searchTimeout); searchLocation(); }
-  if (e.key === 'Escape') hideResults();
-});
-
-async function searchLocation() {
-  const q = document.getElementById('searchInput').value.trim();
-  if (!q) return;
-  geocode(q);
-}
-
-async function geocode(q) {
-  try {
-    const res = await fetch('/geocode?q='+encodeURIComponent(q));
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-
-    const container = document.getElementById('searchResults');
-    container.innerHTML = '';
-    container.style.display = 'flex';
-
-    if (!data.results || data.results.length === 0) {
-      container.innerHTML = '<div class="search-result-item" style="color:var(--muted)">No results found</div>';
-      return;
+const baseChartOpts = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { labels: { color: '#5a5a7a', font: { family: "'Space Mono'", size: 10 }, boxWidth: 12 } },
+    tooltip: {
+      backgroundColor: '#111118',
+      borderColor: '#1e1e2e',
+      borderWidth: 1,
+      titleColor: '#e8e8f0',
+      bodyColor: '#5a5a7a',
+      titleFont: { family: "'Space Mono'" },
+      bodyFont: { family: "'Space Mono'" },
     }
+  },
+  scales: {
+    x: {
+      ticks: { color: '#5a5a7a', font: { family: "'Space Mono'", size: 9 }, maxRotation: 45, maxTicksLimit: 14 },
+      grid: { color: 'rgba(30,30,46,0.7)' }
+    },
+    y: {
+      ticks: { color: '#5a5a7a', font: { family: "'Space Mono'", size: 9 } },
+      grid: { color: 'rgba(30,30,46,0.7)' },
+      min: 0
+    }
+  }
+};
 
-    data.results.slice(0, 5).forEach(r => {
-      const el = document.createElement('div');
-      el.className = 'search-result-item';
-      el.textContent = r.display_name;
-      el.title = r.display_name;
-      el.onclick = () => {
-        map.flyTo([parseFloat(r.lat), parseFloat(r.lon)], 12, { duration: 1.5 });
-        document.getElementById('searchInput').value = r.display_name.split(',')[0];
-        hideResults();
-        log('Navigated to: '+r.display_name.split(',')[0]);
-      };
-      container.appendChild(el);
+function makeLineChart(id, labels, datasets, extraOpts={}) {
+  destroyChart(id);
+  const ctx = document.getElementById(id).getContext('2d');
+  charts[id] = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      ...baseChartOpts,
+      interaction: { mode: 'index', intersect: false },
+      ...extraOpts,
+      scales: {
+        ...baseChartOpts.scales,
+        y: { ...baseChartOpts.scales.y, max: 100 }
+      }
+    }
+  });
+}
+
+function makeBarChart(id, labels, data, color, horizontal=false) {
+  destroyChart(id);
+  const ctx = document.getElementById(id).getContext('2d');
+  charts[id] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: Array.isArray(color) ? color : color,
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      ...baseChartOpts,
+      indexAxis: horizontal ? 'y' : 'x',
+      plugins: { ...baseChartOpts.plugins, legend: { display: false } },
+    }
+  });
+}
+
+function renderRegionList(containerId, items) {
+  const el = document.getElementById(containerId);
+  if (!items || items.length === 0) {
+    el.innerHTML = '<div class="empty">No regional data available</div>';
+    return;
+  }
+  el.innerHTML = items.slice(0, 15).map(item => `
+    <div class="region-item">
+      <div class="region-name">${item.name}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${item.value}%"></div></div>
+      <div class="region-val">${item.value}</div>
+    </div>
+  `).join('');
+}
+
+function renderQueryTable(containerId, items, type) {
+  const el = document.getElementById(containerId);
+  if (!items || items.length === 0) {
+    el.innerHTML = '<div class="empty">No data available</div>';
+    return;
+  }
+  el.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>#</th><th>Query</th><th>Value</th><th>Tag</th></tr></thead>
+      <tbody>
+        ${items.slice(0, 20).map((q, i) => `
+          <tr>
+            <td style="color:var(--muted);font-family:'Space Mono';font-size:10px">${String(i+1).padStart(2,'0')}</td>
+            <td>${q.query}</td>
+            <td style="font-family:'Space Mono';color:${type==='rising'?'var(--accent)':'var(--accent4)'}">${q.value}</td>
+            <td><span class="badge ${type==='rising'?'badge-rise':'badge-top'}">${type.toUpperCase()}</span></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+async function analyze() {
+  document.getElementById('alert-box').classList.remove('show');
+  const keyword = document.getElementById('keyword').value.trim();
+  if (!keyword) { showAlert('Please enter a keyword to analyze.'); return; }
+
+  const compare   = document.getElementById('compare_kw').value.trim();
+  const timeframe = document.getElementById('timeframe').value;
+  const geo       = document.getElementById('geo').value;
+  const cat       = document.getElementById('cat').value;
+  const gprop     = document.getElementById('gprop').value;
+
+  showLoader(true);
+
+  try {
+    const resp = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword, compare, timeframe, geo, cat, gprop })
     });
-  } catch(err) {
-    log('Geocode error: '+err.message, 'err');
+    if (!resp.ok) throw new Error('Server error ' + resp.status);
+    const d = await resp.json();
+    if (d.error) { showAlert('Error: ' + d.error); showLoader(false); return; }
+    renderAll(d, keyword);
+  } catch(e) {
+    showAlert('Request failed: ' + e.message);
+  }
+  showLoader(false);
+}
+
+function renderAll(d, keyword) {
+
+  // -- OVERVIEW --
+  document.getElementById('overview-placeholder').style.display = 'none';
+  document.getElementById('overview-content').style.display = 'block';
+
+  const iot  = d.interest_over_time || {};
+  const dates = iot.dates || [];
+  const vals  = (iot.values || {})[keyword] || [];
+  const avg   = vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) : 0;
+  const peak  = vals.length ? Math.max(...vals) : 0;
+  const last  = vals[vals.length-1] ?? 0;
+  const first = vals[0] ?? 0;
+  const trendStr = vals.length >= 2
+    ? (last > first ? '&#9650; Rising' : (last < first ? '&#9660; Falling' : '&#8212; Stable'))
+    : '&#8212; N/A';
+  const trendColor = last > first ? 'var(--accent)' : 'var(--accent2)';
+
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat-pill">
+      <div class="stat-val">${avg}</div>
+      <div class="stat-lbl">Avg Interest</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-val">${peak}</div>
+      <div class="stat-lbl">Peak Score</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-val">${last}</div>
+      <div class="stat-lbl">Latest Score</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-val" style="color:${trendColor};font-size:18px">${trendStr}</div>
+      <div class="stat-lbl">Trend Direction</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-val" style="font-size:20px">${dates.length}</div>
+      <div class="stat-lbl">Data Points</div>
+    </div>
+  `;
+
+  if (dates.length && vals.length) {
+    makeLineChart('iotChart', dates, [{
+      label: keyword,
+      data: vals,
+      borderColor: '#00ff9d',
+      backgroundColor: 'rgba(0,255,157,0.07)',
+      borderWidth: 2,
+      pointRadius: dates.length > 100 ? 0 : 2,
+      fill: true,
+      tension: 0.35
+    }]);
+  }
+
+  // -- REGIONS --
+  document.getElementById('regions-placeholder').style.display = 'none';
+  document.getElementById('regions-content').style.display = 'block';
+
+  const ibr = d.interest_by_region || {};
+  renderRegionList('countries-list', ibr.countries || []);
+  renderRegionList('cities-list', ibr.cities || []);
+
+  const topC = (ibr.countries || []).slice(0, 12);
+  if (topC.length) {
+    makeBarChart('regionsChart',
+      topC.map(c => c.name),
+      topC.map(c => c.value),
+      'rgba(123,94,167,0.85)',
+      true
+    );
+  }
+
+  // -- RELATED TOPICS --
+  document.getElementById('related-placeholder').style.display = 'none';
+  document.getElementById('related-content').style.display = 'block';
+
+  const rt = d.related_topics || {};
+  const topTopics    = rt.top    || [];
+  const risingTopics = rt.rising || [];
+
+  document.getElementById('related-top-list').innerHTML = topTopics.length
+    ? `<table class="data-table">
+        <thead><tr><th>Topic</th><th>Type</th><th>Value</th></tr></thead>
+        <tbody>${topTopics.slice(0,15).map(t=>`
+          <tr>
+            <td>${t.topic_title}</td>
+            <td style="color:var(--muted);font-size:11px">${t.topic_type||''}</td>
+            <td style="font-family:'Space Mono';color:var(--accent4)">${t.value}</td>
+          </tr>`).join('')}
+        </tbody></table>`
+    : '<div class="empty">No top topics found</div>';
+
+  document.getElementById('related-rising-list').innerHTML = risingTopics.length
+    ? `<table class="data-table">
+        <thead><tr><th>Topic</th><th>Type</th><th>Value</th></tr></thead>
+        <tbody>${risingTopics.slice(0,15).map(t=>`
+          <tr>
+            <td>${t.topic_title}</td>
+            <td style="color:var(--muted);font-size:11px">${t.topic_type||''}</td>
+            <td style="font-family:'Space Mono';color:var(--accent)">${t.value}</td>
+          </tr>`).join('')}
+        </tbody></table>`
+    : '<div class="empty">No rising topics found</div>';
+
+  if (risingTopics.length) {
+    const rs = risingTopics.slice(0, 8);
+    makeBarChart('risingTopicsChart',
+      rs.map(t => t.topic_title.substring(0, 22)),
+      rs.map(t => { const n = parseInt(t.value); return isNaN(n) ? 0 : Math.min(n, 50000); }),
+      'rgba(255,60,172,0.8)'
+    );
+  }
+
+  // -- QUERIES --
+  document.getElementById('queries-placeholder').style.display = 'none';
+  document.getElementById('queries-content').style.display = 'block';
+
+  const rq = d.related_queries || {};
+  renderQueryTable('top-queries-list',    rq.top    || [], 'top');
+  renderQueryTable('rising-queries-list', rq.rising || [], 'rising');
+
+  // -- TRENDING --
+  const trending = d.trending_searches || [];
+  const trendEl  = document.getElementById('daily-trending-list');
+  if (trending.length) {
+    trendEl.innerHTML = trending.slice(0, 20).map((t, i) => `
+      <div class="trend-item">
+        <div class="trend-num">${String(i+1).padStart(2,'0')}</div>
+        <div class="trend-kw">${t.title || t}</div>
+        <div class="trend-traffic">${t.traffic || ''}</div>
+      </div>
+    `).join('');
+
+    const top10 = trending.slice(0, 10);
+    makeBarChart('trendingChart',
+      top10.map(t => (t.title || t).substring(0, 18)),
+      top10.map((_, i) => 10 - i),
+      'rgba(56,189,248,0.8)'
+    );
+  } else {
+    trendEl.innerHTML = '<div class="empty">No trending data available for this region</div>';
+  }
+
+  // -- COMPARISON --
+  const allKws = Object.keys(iot.values || {});
+  if (allKws.length > 1) {
+    document.getElementById('compare-placeholder').style.display = 'none';
+    document.getElementById('compare-content').style.display    = 'block';
+
+    document.getElementById('kw-tags').innerHTML = allKws.map((kw, i) => `
+      <span class="kw-tag">
+        <span class="dot" style="background:${COLORS[i % COLORS.length]}"></span>
+        ${kw}
+      </span>
+    `).join('');
+
+    const datasets = allKws.map((kw, i) => ({
+      label: kw,
+      data: (iot.values[kw] || []),
+      borderColor: COLORS[i % COLORS.length],
+      backgroundColor: COLORS[i % COLORS.length] + '12',
+      borderWidth: 2,
+      pointRadius: dates.length > 100 ? 0 : 1,
+      fill: false,
+      tension: 0.3
+    }));
+    makeLineChart('compareChart', dates, datasets);
+
+    const avgs = allKws.map(kw => {
+      const v = iot.values[kw] || [];
+      return v.length ? Math.round(v.reduce((a,b)=>a+b,0)/v.length) : 0;
+    });
+    destroyChart('compareBarChart');
+    const ctx2 = document.getElementById('compareBarChart').getContext('2d');
+    charts['compareBarChart'] = new Chart(ctx2, {
+      type: 'bar',
+      data: {
+        labels: allKws,
+        datasets: [{
+          data: avgs,
+          backgroundColor: allKws.map((_, i) => COLORS[i % COLORS.length]),
+          borderRadius: 6,
+          borderSkipped: false
+        }]
+      },
+      options: {
+        ...baseChartOpts,
+        plugins: { ...baseChartOpts.plugins, legend: { display: false } },
+        scales: {
+          ...baseChartOpts.scales,
+          y: { ...baseChartOpts.scales.y, max: 100 }
+        }
+      }
+    });
+  } else {
+    document.getElementById('compare-placeholder').style.display = 'flex';
+    document.getElementById('compare-content').style.display = 'none';
+  }
+
+  // -- HOURLY --
+  const hourly = d.hourly_interest || {};
+  if (hourly.dates && hourly.dates.length) {
+    document.getElementById('hourly-placeholder').style.display = 'none';
+    document.getElementById('hourly-content').style.display = 'block';
+    makeLineChart('hourlyChart', hourly.dates, [{
+      label: keyword + ' (hourly)',
+      data: hourly.values || [],
+      borderColor: '#f7c59f',
+      backgroundColor: 'rgba(247,197,159,0.06)',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      tension: 0.2
+    }]);
   }
 }
 
-function hideResults() {
-  const c = document.getElementById('searchResults');
-  c.style.display = 'none';
-}
-
-document.addEventListener('click', e => {
-  if (!e.target.closest('.search-wrap')) hideResults();
+document.getElementById('keyword').addEventListener('keydown', e => {
+  if (e.key === 'Enter') analyze();
 });
 </script>
 </body>
 </html>
 """
 
+pytrends = TrendReq(hl='en-US', tz=330, timeout=(10, 25), retries=2, backoff_factor=0.5)
 
-@app.route("/")
+@app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    data = request.get_json()
+    keyword   = data.get('keyword', '').strip()
+    compare   = data.get('compare', '').strip()
+    timeframe = data.get('timeframe', 'today 3-m')
+    geo       = data.get('geo', '')
+    cat       = int(data.get('cat', 0))
+    gprop     = data.get('gprop', '')
 
-@app.route("/token-status")
-def token_status():
-    """Returns live token metadata for the UI countdown."""
-    return jsonify(_token_mgr.status())
+    if not keyword:
+        return jsonify({'error': 'Keyword is required'})
 
+    kw_list = [keyword]
+    if compare:
+        extras = [k.strip() for k in compare.split(',') if k.strip()]
+        kw_list = (kw_list + extras)[:5]
 
-@app.route("/geocode")
-def geocode():
-    q = request.args.get("q", "")
-    if not q:
-        return jsonify({"error": "No query"}), 400
+    result = {}
+
+    # ---------- Interest Over Time ----------
     try:
-        r = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": q, "format": "json", "limit": 5, "addressdetails": 0},
-            headers={"User-Agent": "SentinelEye/1.0"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        return jsonify({"results": r.json()})
+        pytrends.build_payload(kw_list, cat=cat, timeframe=timeframe, geo=geo, gprop=gprop)
+        time.sleep(0.4)
+        iot_df = pytrends.interest_over_time()
+        if iot_df is not None and not iot_df.empty:
+            if 'isPartial' in iot_df.columns:
+                iot_df = iot_df.drop(columns=['isPartial'])
+            result['interest_over_time'] = {
+                'dates':  [str(d)[:10] for d in iot_df.index.tolist()],
+                'values': {col: iot_df[col].tolist() for col in iot_df.columns}
+            }
+        else:
+            result['interest_over_time'] = {'dates': [], 'values': {}}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        result['interest_over_time'] = {'dates': [], 'values': {}, 'error': str(e)}
 
-
-@app.route("/wms-url")
-def wms_url():
-    """Returns WMS endpoint info for the frontend to use."""
-    layer = request.args.get("layer", "TRUE-COLOR")
-    date_from = request.args.get("dateFrom")
-    date_to = request.args.get("dateTo")
-    cloud = request.args.get("cloud", "30")
-
-    # Map friendly names to Sentinel Hub layer names
-    layer_map = {
-        "TRUE-COLOR": "TRUE-COLOR",
-        "FALSE-COLOR": "FALSE-COLOR",
-        "NDVI": "NDVI",
-        "MOISTURE-INDEX": "MOISTURE-INDEX",
-        "SWIR": "SWIR",
-        "GEOLOGY": "GEOLOGY",
-    }
-
-    sh_layer = layer_map.get(layer, "TRUE-COLOR")
-
-    # Copernicus Sentinel Hub WMS base URL
-    wms_base = "https://sh.dataspace.copernicus.eu/ogc/wms/1635b3a9-a94a-4e94-b82b-f1dda13ab684"
-
-    return jsonify(
-        {
-            "wms_url": wms_base,
-            "layer_id": sh_layer,
-            "time_range": f"{date_from}/{date_to}",
-            "token": COPERNICUS_TOKEN(),
-            "tile_url": f"/proxy-tile?layer={sh_layer}&dateFrom={date_from}&dateTo={date_to}&cloud={cloud}",
-        }
-    )
-
-
-# ── Evalscripts for each layer (Sentinel Hub Process API) ─────────────────────
-# These are JavaScript snippets executed server-side by Sentinel Hub to render
-# each band combination. No instance UUID needed — Bearer token is sufficient.
-EVALSCRIPTS = {
-    "TRUE-COLOR": """
-//VERSION=3
-function setup(){return{input:["B04","B03","B02","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  return[3.5*s.B04,3.5*s.B03,3.5*s.B02,s.dataMask];
-}""",
-    "FALSE-COLOR": """
-//VERSION=3
-function setup(){return{input:["B08","B04","B03","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  return[2.5*s.B08,2.5*s.B04,2.5*s.B03,s.dataMask];
-}""",
-    "NDVI": """
-//VERSION=3
-function setup(){return{input:["B08","B04","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  var ndvi=(s.B08-s.B04)/(s.B08+s.B04);
-  var r,g,b;
-  if(ndvi<-0.2){r=0.75;g=0.75;b=0.75;}
-  else if(ndvi<0){r=0.86;g=0.86;b=0.86;}
-  else if(ndvi<0.1){r=1;g=0.98;b=0.8;}
-  else if(ndvi<0.2){r=0.78;g=0.88;b=0.52;}
-  else if(ndvi<0.3){r=0.36;g=0.73;b=0.36;}
-  else if(ndvi<0.4){r=0.13;g=0.55;b=0.13;}
-  else{r=0;g=0.39;b=0;}
-  return[r,g,b,s.dataMask];
-}""",
-    "MOISTURE-INDEX": """
-//VERSION=3
-function setup(){return{input:["B8A","B11","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  var mi=(s.B8A-s.B11)/(s.B8A+s.B11);
-  var r,g,b;
-  if(mi<-0.8){r=0.5;g=0;b=0;}
-  else if(mi<-0.4){r=1;g=0;b=0;}
-  else if(mi<0){r=1;g=0.6;b=0;}
-  else if(mi<0.2){r=1;g=1;b=0.6;}
-  else if(mi<0.4){r=0.6;g=0.8;b=1;}
-  else{r=0;g=0.4;b=1;}
-  return[r,g,b,s.dataMask];
-}""",
-    "SWIR": """
-//VERSION=3
-function setup(){return{input:["B12","B8A","B04","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  return[2.5*s.B12,2.5*s.B8A,2.5*s.B04,s.dataMask];
-}""",
-    "GEOLOGY": """
-//VERSION=3
-function setup(){return{input:["B12","B11","B02","dataMask"],output:{bands:4}}}
-function evaluatePixel(s){
-  return[2.5*s.B12,2.5*s.B11,2.5*s.B02,s.dataMask];
-}""",
-}
-
-# ── Tile helpers ───────────────────────────────────────────────────────────────
-def xyz_to_wgs84_bbox(z, x, y):
-    """Return (min_lon, min_lat, max_lon, max_lat) for an XYZ tile."""
-    z, x, y = int(z), int(x), int(y)
-    n = 2 ** z
-    lon_w = x / n * 360.0 - 180.0
-    lon_e = (x + 1) / n * 360.0 - 180.0
-    lat_n = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
-    lat_s = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
-    return lon_w, lat_s, lon_e, lat_n
-
-
-def xyz_to_epsg3857(z, x, y):
-    """Return (minX, minY, maxX, maxY) in EPSG:3857 metres for an XYZ tile."""
-    z, x, y = int(z), int(x), int(y)
-    R = 6378137.0
-    n = 2 ** z
-    left  = x / n * 2 * math.pi * R - math.pi * R
-    right = (x + 1) / n * 2 * math.pi * R - math.pi * R
-    top = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * y / n))) / 2)) * R
-    bot = math.log(math.tan(math.pi / 4 + math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))) / 2)) * R
-    return left, bot, right, top
-
-
-EMPTY_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
-    "AABjkB6QAAAABJRU5ErkJggg=="
-)
-
-
-@app.route("/proxy-tile")
-def proxy_tile():
-    """
-    Fetch a Sentinel-2 L2A tile via the Sentinel Hub Process API.
-
-    The Process API (api/v1/process) works with a plain Bearer token —
-    no configuration instance UUID required. It accepts an evalscript
-    that defines the band maths + output colour mapping.
-    """
-    layer     = request.args.get("layer", "TRUE-COLOR")
-    date_from = request.args.get("dateFrom")
-    date_to   = request.args.get("dateTo")
-    cloud     = request.args.get("cloud", "30")
-    z         = request.args.get("z", "5")
-    x         = request.args.get("x", "0")
-    y         = request.args.get("y", "0")
-
-    evalscript = EVALSCRIPTS.get(layer, EVALSCRIPTS["TRUE-COLOR"])
-    lon_w, lat_s, lon_e, lat_n = xyz_to_wgs84_bbox(z, x, y)
-
-    # Sentinel Hub Process API endpoint for Copernicus Data Space
-    PROCESS_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
-
-    payload = {
-        "input": {
-            "bounds": {
-                "bbox": [lon_w, lat_s, lon_e, lat_n],
-                "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"},
-            },
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {
-                        "from": f"{date_from}T00:00:00Z",
-                        "to":   f"{date_to}T23:59:59Z",
-                    },
-                    "maxCloudCoverage": int(cloud),
-                    "mosaickingOrder": "leastCC",   # use least-cloudy scene
-                },
-            }],
-        },
-        "output": {
-            "width":  512,
-            "height": 512,
-            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
-        },
-        "evalscript": evalscript,
-    }
-
+    # ---------- Interest by Region ----------
     try:
-        hdrs = {
-            "Authorization": f"Bearer {COPERNICUS_TOKEN()}",
-            "Content-Type":  "application/json",
-            "Accept":        "image/png",
+        pytrends.build_payload([keyword], cat=cat, timeframe=timeframe, geo=geo, gprop=gprop)
+        time.sleep(0.4)
+
+        def region_list(resolution):
+            df = pytrends.interest_by_region(resolution=resolution, inc_low_vol=False, inc_geo_code=False)
+            if df is None or df.empty:
+                return []
+            col = keyword if keyword in df.columns else df.columns[0]
+            df = df.sort_values(col, ascending=False)
+            return [{'name': str(idx), 'value': int(row[col])}
+                    for idx, row in df.iterrows() if int(row[col]) > 0]
+
+        result['interest_by_region'] = {
+            'countries': region_list('COUNTRY')[:30],
+            'cities':    region_list('CITY')[:30]
         }
-        r = requests.post(PROCESS_URL, json=payload, headers=hdrs, timeout=30)
-        ct = r.headers.get("Content-Type", "")
+    except Exception as e:
+        result['interest_by_region'] = {'countries': [], 'cities': [], 'error': str(e)}
 
-        if r.status_code == 200 and "image" in ct:
-            return Response(r.content, content_type=ct)
-
-        print(f"[proxy-tile] {r.status_code} layer={layer} z={z} x={x} y={y}")
-        print(f"[proxy-tile] body: {r.text[:500]}")
-        return Response(EMPTY_PNG, content_type="image/png")
-
-    except Exception as exc:
-        print(f"[proxy-tile] exception: {exc}")
-        return Response(EMPTY_PNG, content_type="image/png")
-
-
-@app.route("/debug-tile")
-def debug_tile():
-    """
-    Visit http://localhost:5000/debug-tile to verify Copernicus connectivity.
-    Returns JSON showing the API response for one test tile over India.
-    """
-    from datetime import date, timedelta
-    today     = date.today().isoformat()
-    month_ago = (date.today() - timedelta(days=30)).isoformat()
-
-    # Test tile: z=8, x=180, y=110 — covers southern India
-    lon_w, lat_s, lon_e, lat_n = xyz_to_wgs84_bbox(8, 180, 110)
-
-    payload = {
-        "input": {
-            "bounds": {
-                "bbox": [lon_w, lat_s, lon_e, lat_n],
-                "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"},
-            },
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {"from": f"{month_ago}T00:00:00Z", "to": f"{today}T23:59:59Z"},
-                    "maxCloudCoverage": 50,
-                    "mosaickingOrder": "leastCC",
-                },
-            }],
-        },
-        "output": {
-            "width": 256, "height": 256,
-            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
-        },
-        "evalscript": EVALSCRIPTS["TRUE-COLOR"],
-    }
-
-    hdrs = {
-        "Authorization": f"Bearer {COPERNICUS_TOKEN()}",
-        "Content-Type":  "application/json",
-        "Accept":        "image/png",
-    }
+    # ---------- Related Topics ----------
     try:
-        r = requests.post("https://sh.dataspace.copernicus.eu/api/v1/process",
-                          json=payload, headers=hdrs, timeout=20)
-        return jsonify({
-            "status":         r.status_code,
-            "content_type":   r.headers.get("Content-Type"),
-            "content_length": len(r.content),
-            "body_preview":   r.text[:600] if "image" not in r.headers.get("Content-Type","") else "<<IMAGE OK>>",
-            "token_ok":       COPERNICUS_TOKEN() != "",
-            "bbox_tested":    [lon_w, lat_s, lon_e, lat_n],
-        })
-    except Exception as exc:
-        return jsonify({"error": str(exc)})
+        pytrends.build_payload([keyword], cat=cat, timeframe=timeframe, geo=geo, gprop=gprop)
+        time.sleep(0.4)
+        rt = pytrends.related_topics()
+        top_t, rise_t = [], []
+        if rt and keyword in rt:
+            top_df  = rt[keyword].get('top')
+            rise_df = rt[keyword].get('rising')
+            if top_df is not None and not top_df.empty:
+                top_t = [{'topic_title': str(r.get('topic_title','')),
+                          'topic_type':  str(r.get('topic_type','')),
+                          'value':       str(r.get('value',''))}
+                         for _, r in top_df.iterrows()]
+            if rise_df is not None and not rise_df.empty:
+                rise_t = [{'topic_title': str(r.get('topic_title','')),
+                           'topic_type':  str(r.get('topic_type','')),
+                           'value':       str(r.get('value',''))}
+                          for _, r in rise_df.iterrows()]
+        result['related_topics'] = {'top': top_t[:20], 'rising': rise_t[:20]}
+    except Exception as e:
+        result['related_topics'] = {'top': [], 'rising': [], 'error': str(e)}
 
+    # ---------- Related Queries ----------
+    try:
+        pytrends.build_payload([keyword], cat=cat, timeframe=timeframe, geo=geo, gprop=gprop)
+        time.sleep(0.4)
+        rq = pytrends.related_queries()
+        top_q, rise_q = [], []
+        if rq and keyword in rq:
+            top_df  = rq[keyword].get('top')
+            rise_df = rq[keyword].get('rising')
+            if top_df is not None and not top_df.empty:
+                top_q = [{'query': str(r.get('query','')), 'value': str(r.get('value',''))}
+                         for _, r in top_df.iterrows()]
+            if rise_df is not None and not rise_df.empty:
+                rise_q = [{'query': str(r.get('query','')), 'value': str(r.get('value',''))}
+                          for _, r in rise_df.iterrows()]
+        result['related_queries'] = {'top': top_q[:25], 'rising': rise_q[:25]}
+    except Exception as e:
+        result['related_queries'] = {'top': [], 'rising': [], 'error': str(e)}
 
-if __name__ == "__main__":
-    print("="*55)
-    print("  SENTINEL EYE — Satellite Viewer")
-    print("  Token auto-refresh: every 27 min (daemon thread)")
-    print("  Open http://localhost:5000 in your browser")
-    print("="*55)
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # ---------- Trending Searches ----------
+    try:
+        time.sleep(0.4)
+        geo_map = {
+            'US':'united_states','GB':'united_kingdom','IN':'india',
+            'CA':'canada','AU':'australia','DE':'germany',
+            'FR':'france','JP':'japan','BR':'brazil','SG':'singapore',
+            'KR':'south_korea','ZA':'south_africa'
+        }
+        trend_geo = geo_map.get(geo, 'united_states')
+        ts_df = pytrends.trending_searches(pn=trend_geo)
+        trending = []
+        if ts_df is not None and not ts_df.empty:
+            trending = [{'title': str(t), 'traffic': ''} for t in ts_df[0].tolist()]
+        result['trending_searches'] = trending[:25]
+    except Exception as e:
+        result['trending_searches'] = []
+
+    # ---------- Hourly Interest ----------
+    try:
+        time.sleep(0.5)
+        now   = datetime.now()
+        start = now - timedelta(days=7)
+        hourly_df = pytrends.get_historical_interest(
+            [keyword],
+            year_start=start.year, month_start=start.month, day_start=start.day, hour_start=0,
+            year_end=now.year,   month_end=now.month,   day_end=now.day,   hour_end=23,
+            cat=cat, geo=geo, gprop=gprop, sleep=1
+        )
+        if hourly_df is not None and not hourly_df.empty:
+            if 'isPartial' in hourly_df.columns:
+                hourly_df = hourly_df.drop(columns=['isPartial'])
+            col = keyword if keyword in hourly_df.columns else hourly_df.columns[0]
+            result['hourly_interest'] = {
+                'dates':  [str(d)[:16] for d in hourly_df.index.tolist()],
+                'values': hourly_df[col].tolist()
+            }
+        else:
+            result['hourly_interest'] = {'dates': [], 'values': []}
+    except Exception as e:
+        result['hourly_interest'] = {'dates': [], 'values': [], 'error': str(e)}
+
+    return jsonify(result)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
